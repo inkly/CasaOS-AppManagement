@@ -98,6 +98,14 @@ func main() {
 			panic(err)
 		}
 
+		// start apps that were abandoned because the default storage was not
+		// ready when docker first tried to start them at boot
+		if _, err := crontab.AddFunc("@every 15s", func() {
+			service.MyService.Compose().RecoverAppsWaitingForStorage(ctx)
+		}); err != nil {
+			panic(err)
+		}
+
 		crontab.Start()
 		defer crontab.Stop()
 

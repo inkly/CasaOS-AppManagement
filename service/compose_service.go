@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
 	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
@@ -24,6 +26,8 @@ import (
 
 type ComposeService struct {
 	installationInProgress sync.Map
+	_recoveryDone          atomic.Bool
+	_recoveryStartedAt     time.Time
 }
 
 func (s *ComposeService) PrepareWorkingDirectory(name string) (string, error) {
@@ -120,6 +124,8 @@ func (s *ComposeService) Uninstall(ctx context.Context, composeApp *ComposeApp, 
 		logger.Info("failed to update event properties from store info", zap.Error(err), zap.String("name", composeApp.Name))
 	}
 
+	clearAppStopped(composeApp.Name)
+
 	go func(ctx context.Context) {
 		go PublishEventWrapper(ctx, common.EventTypeAppUninstallBegin, nil)
 
@@ -194,6 +200,7 @@ func (s *ComposeService) List(ctx context.Context) (map[string]*ComposeApp, erro
 func NewComposeService() *ComposeService {
 	return &ComposeService{
 		installationInProgress: sync.Map{},
+		_recoveryStartedAt:     time.Now(),
 	}
 }
 

@@ -715,6 +715,9 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 	defer dockerClient.Close()
 
 	eventProperties := common.PropertiesFromContext(ctx)
+	if eventProperties == nil {
+		eventProperties = map[string]string{}
+	}
 	eventProperties[common.PropertyTypeAppName.Name] = a.Name
 
 	switch status {
@@ -723,6 +726,9 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 			go PublishEventWrapper(ctx, common.EventTypeAppStartBegin, nil)
 
 			defer PublishEventWrapper(ctx, common.EventTypeAppStartEnd, nil)
+
+			// the user wants the app running again, drop any stale marker
+			clearAppStopped(a.Name)
 
 			// to make sure the container is stopped
 			// timeout is 20s
@@ -768,13 +774,18 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 				})
 
 				logger.Error("failed to stop compose app", zap.Error(err), zap.String("name", a.Name))
+				return
 			}
+
+			markAppStopped(a.Name)
 		}(ctx)
 	case codegen.RequestComposeAppStatusRestart:
 		go func(ctx context.Context) {
 			go PublishEventWrapper(ctx, common.EventTypeAppRestartBegin, nil)
 
 			defer PublishEventWrapper(ctx, common.EventTypeAppRestartEnd, nil)
+
+			clearAppStopped(a.Name)
 
 			if err := service.Restart(ctx, a.Name, api.RestartOptions{}); err != nil {
 				go PublishEventWrapper(ctx, common.EventTypeAppRestartError, map[string]string{
