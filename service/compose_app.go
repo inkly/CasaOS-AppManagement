@@ -715,6 +715,9 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 	defer dockerClient.Close()
 
 	eventProperties := common.PropertiesFromContext(ctx)
+	if eventProperties == nil {
+		eventProperties = map[string]string{}
+	}
 	eventProperties[common.PropertyTypeAppName.Name] = a.Name
 
 	switch status {

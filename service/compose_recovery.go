@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
+	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
 	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
@@ -154,7 +155,9 @@ func (s *ComposeService) RecoverAppsWaitingForStorage(ctx context.Context) {
 		}
 
 		logger.Info("starting app that was blocked by storage", zap.String("name", name))
-		if err := app.SetStatus(ctx, codegen.RequestComposeAppStatusStart); err != nil {
+		// the service context has no event properties, so add an empty set;
+		// SetStatus assigns into the properties map
+		if err := app.SetStatus(common.WithProperties(ctx, map[string]string{}), codegen.RequestComposeAppStatusStart); err != nil {
 			logger.Error("failed to start app during recovery", zap.Error(err), zap.String("name", name))
 		}
 	}
