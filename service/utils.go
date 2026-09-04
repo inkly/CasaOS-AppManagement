@@ -30,6 +30,15 @@ func Standardize(text string) string {
 	return result
 }
 
+// ComposeAppFromSettingsYAML parses the compose YAML the settings page (and the raw compose
+// editor) sends back to ApplyComposeAppSettings. Interpolation must stay ON: that YAML came from
+// GenerateYAMLFromComposeApp and already has `$` escaped as `$$`, so interpolating collapses it
+// back to `$` and the generator re-escapes it exactly once. skipInterpolation=true doubled it on
+// every save (#1988).
+func ComposeAppFromSettingsYAML(buf []byte) (*ComposeApp, error) {
+	return NewComposeAppFromYAML(buf, false, true)
+}
+
 func GenerateYAMLFromComposeApp(compose ComposeApp) ([]byte, error) {
 	// to duplicate Specify Chars
 	for _, service := range compose.Services {
