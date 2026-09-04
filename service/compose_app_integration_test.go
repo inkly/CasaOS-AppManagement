@@ -16,6 +16,15 @@ import (
 )
 
 func TestComposeAppLifecycle(t *testing.T) {
+	// This drives a real compose app through install, update and removal, and
+	// needs a running CasaOS host behind it: an app store to resolve against and
+	// a message bus to publish to. A Docker daemon alone is not enough - on a
+	// bare CI runner the test gets past that check and then fails on the missing
+	// store. Opt in explicitly where the whole stack exists.
+	if os.Getenv("CASAOS_INTEGRATION") == "" {
+		t.Skip("set CASAOS_INTEGRATION=1 to run against a live CasaOS host")
+	}
+
 	if !appdocker.IsDaemonRunning() {
 		t.Skip("Docker daemon is not running")
 	}
