@@ -341,7 +341,7 @@ changelog:
       - "^test:"
 release:
   github:
-    owner: IceWhaleTech
+    owner: inkly
     name: CasaOS-AppManagement
   draft: false
   prerelease: auto
