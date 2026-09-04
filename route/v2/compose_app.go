@@ -168,8 +168,10 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 		})
 	}
 
-	// validate new compose yaml
-	newComposeApp, err := service.NewComposeAppFromYAML(buf, true, true)
+	// validate new compose yaml. Interpolation must stay ON: the YAML the UI sends back came from
+	// GenerateYAMLFromComposeApp and already has `$` escaped as `$$`; interpolating collapses it to `$`
+	// so it is re-escaped exactly once below. skipInterpolation=true doubled it on every save (#1988).
+	newComposeApp, err := service.NewComposeAppFromYAML(buf, false, true)
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{
