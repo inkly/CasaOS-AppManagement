@@ -183,3 +183,33 @@ func TestFilterCatalogByAppStoreID(t *testing.T) {
 	filteredCatalog = v2.FilterCatalogByAppStoreID(catalog, []string{"test1", "test2", "test3"})
 	assert.Equal(t, len(filteredCatalog), 1)
 }
+
+func TestFilterCatalogByArchitecture(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	xcasaos := func(archs interface{}) *service.ComposeApp {
+		ext := map[string]interface{}{"category": "test"}
+		if archs != nil {
+			ext["architectures"] = archs
+		}
+		return &service.ComposeApp{Extensions: map[string]interface{}{common.ComposeExtensionNameXCasaOS: ext}}
+	}
+
+	catalog := map[string]*service.ComposeApp{
+		"none":  xcasaos(nil),                    // no architectures key -> kept
+		"empty": xcasaos([]interface{}{}),        // explicit empty list -> kept
+		"amd64": xcasaos([]interface{}{"amd64"}), // mismatch on arm -> dropped
+		"multi": xcasaos([]interface{}{"amd64", "arm", "arm64"}),
+		"noext": {Extensions: map[string]interface{}{}}, // no x-casaos -> dropped
+	}
+
+	filtered := v2.FilterCatalogByArchitecture(catalog, "arm")
+	assert.Equal(t, len(filtered), 3)
+	_, ok := filtered["amd64"]
+	assert.Assert(t, !ok)
+	_, ok = filtered["noext"]
+	assert.Assert(t, !ok)
+
+	filtered = v2.FilterCatalogByArchitecture(catalog, "amd64")
+	assert.Equal(t, len(filtered), 4)
+}

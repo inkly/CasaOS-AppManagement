@@ -112,6 +112,22 @@ func (a *ComposeApp) AuthorType() codegen.StoreAppAuthorType {
 	return codegen.Community
 }
 
+// SupportsArchitecture reports whether the compose app runs on arch (a runtime.GOARCH value:
+// amd64, arm64, arm). A missing or empty `architectures` list means every architecture,
+// matching the UI (AppPanel.vue `unuseable`).
+func (a *ComposeApp) SupportsArchitecture(arch string) bool {
+	storeInfo, err := a.StoreInfo(false)
+	if err != nil {
+		return false
+	}
+
+	if storeInfo.Architectures == nil || len(*storeInfo.Architectures) == 0 {
+		return true
+	}
+
+	return lo.Contains(*storeInfo.Architectures, arch)
+}
+
 func (a *ComposeApp) SetStoreAppID(storeAppID string) (string, bool) {
 	// set store_app_id (by convention is the same as app name at install time if it does not exist)
 	extension, ok := a.Extensions[common.ComposeExtensionNameXCasaOS]

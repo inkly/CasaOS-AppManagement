@@ -11,6 +11,7 @@ import (
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
 	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
 	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
+	pkg_utils "github.com/IceWhaleTech/CasaOS-AppManagement/pkg/utils"
 	"github.com/IceWhaleTech/CasaOS-Common/utils"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
@@ -320,6 +321,11 @@ func (a *AppStoreManagement) CategoryMap() (map[string]codegen.CategoryInfo, err
 	}
 
 	for _, app := range catalog {
+		// count what the list endpoint actually returns, which is architecture-filtered
+		if !app.SupportsArchitecture(pkg_utils.GetCPUArch()) {
+			continue
+		}
+
 		storeInfo, err := app.StoreInfo(false)
 		if err != nil {
 			continue

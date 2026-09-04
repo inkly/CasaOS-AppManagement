@@ -144,23 +144,7 @@ func (a *AppManagement) ComposeAppStoreInfoList(ctx echo.Context, params codegen
 		catalog = FilterCatalogByAppStoreID(catalog, recommendedList)
 	}
 
-	cpuArch := pkg_utils.GetCPUArch()
-
-	// Filter applications based on CPU architecture
-	catalog = lo.PickBy(catalog, func(appStoreID string, composeApp *service.ComposeApp) bool {
-		storeInfo, err := composeApp.StoreInfo(true)
-		if err != nil {
-			logger.Error("Failed to get app store information", zap.Error(err), zap.String("appStoreID", appStoreID))
-			return false
-		}
-
-		// If architecture information is empty, assume it supports all architectures
-		if storeInfo.Architectures == nil {
-			return true
-		}
-		// Check if the application supports the current CPU architecture
-		return lo.Contains(*storeInfo.Architectures, cpuArch)
-	})
+	catalog = FilterCatalogByArchitecture(catalog, pkg_utils.GetCPUArch())
 
 	// list
 	list := lo.MapValues(catalog, func(composeApp *service.ComposeApp, appStoreID string) codegen.ComposeAppStoreInfo {
@@ -407,6 +391,12 @@ func FilterCatalogByAuthorType(catalog map[string]*service.ComposeApp, authorTyp
 func FilterCatalogByAppStoreID(catalog map[string]*service.ComposeApp, appStoreIDs []string) map[string]*service.ComposeApp {
 	return lo.PickBy(catalog, func(storeAppID string, _ *service.ComposeApp) bool {
 		return lo.Contains(appStoreIDs, storeAppID)
+	})
+}
+
+func FilterCatalogByArchitecture(catalog map[string]*service.ComposeApp, arch string) map[string]*service.ComposeApp {
+	return lo.PickBy(catalog, func(_ string, composeApp *service.ComposeApp) bool {
+		return composeApp.SupportsArchitecture(arch)
 	})
 }
 
