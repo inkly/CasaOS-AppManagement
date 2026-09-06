@@ -18,9 +18,9 @@ func TestSettingsYAMLRoundTripIsIdempotent(t *testing.T) {
 
 	save := func(yaml []byte) []byte {
 		// same two calls as ApplyComposeAppSettings in route/v2/compose_app.go
-		app, err := service.ComposeAppFromSettingsYAML(yaml)
+		app, err := service.ComposeAppFromSettingsYAML(yaml, nil)
 		assert.NilError(t, err)
-		out, err := service.GenerateYAMLFromComposeApp(*app)
+		out, err := service.GenerateYAMLFromComposeApp(*app, nil)
 		assert.NilError(t, err)
 		return out
 	}

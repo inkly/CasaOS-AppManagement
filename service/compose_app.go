@@ -1004,6 +1004,12 @@ func removeRuntime(a *ComposeApp) {
 }
 
 func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) (*ComposeApp, error) {
+	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil)
+}
+
+// keep lists the names whose `${NAME}` references must survive interpolation as references
+// (see ComposeApp.EnvKeys); nil resolves everything as before.
+func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}) (*ComposeApp, error) {
 	tmpWorkingDir, err := os.MkdirTemp("", "casaos-compose-app-*")
 	if err != nil {
 		return nil, err
@@ -1021,7 +1027,7 @@ func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) 
 					Content: []byte(yaml),
 				},
 			},
-			Environment: map[string]string{},
+			Environment: keepRefs(keep),
 
 			// need to set a working dir because loader/normalize.go from github.com/compose-spec/compose-go makes
 			// wrong assumption that the working dir is the same as the dir where this program is launched.
@@ -1032,6 +1038,10 @@ func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) 
 			o.SkipValidation = skipValidation
 
 			o.Interpolate.LookupValue = func(key string) (string, bool) {
+				if _, ok := keep[key]; ok {
+					return "${" + key + "}", true
+				}
+
 				switch key {
 				case "WEBUI_PORT":
 					fmt.Printf("WEBUI_PORT is not specified, using %d\n", port)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
@@ -58,8 +59,18 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 
 	accept := ctx.Request().Header.Get(echo.HeaderAccept)
 	if accept == common.MIMEApplicationYAML {
+		// the editor must see `${KEY}` for what `.env` defines, not the resolved value, or the
+		// next save bakes it into docker-compose.yml. Fall back to the resolved app when a kept
+		// reference sits where compose needs a real value (e.g. `${PORT}:80` in ports).
+		keep := composeApp.EnvKeys()
+		editing, err := service.LoadComposeAppForEditing(id, composeApp.ComposeFiles[0], keep)
+		if err != nil {
+			logger.Error("failed to load compose app with .env references kept, showing resolved values", zap.Error(err), zap.String("id", id))
+			editing = composeApp
+		}
+
 		// generate yaml should to replace all yaml.Marshal. But for now, we just use it Setting Page API
-		yaml, err := service.GenerateYAMLFromComposeApp(*composeApp)
+		yaml, err := service.GenerateYAMLFromComposeApp(*editing, keep)
 		if err != nil {
 			message := err.Error()
 			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
@@ -169,7 +180,8 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	}
 
 	// validate new compose yaml (ComposeAppFromSettingsYAML says why interpolation stays on: #1988)
-	newComposeApp, err := service.ComposeAppFromSettingsYAML(buf)
+	keep := composeApp.EnvKeys()
+	newComposeApp, err := service.ComposeAppFromSettingsYAML(buf, keep)
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{
@@ -186,7 +198,7 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	}
 
 	_ = newComposeApp.SetUncontrolled(uncontrolled)
-	buf, err = service.GenerateYAMLFromComposeApp(*newComposeApp)
+	buf, err = service.GenerateYAMLFromComposeApp(*newComposeApp, keep)
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
@@ -265,6 +277,96 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
 			Message: &message,
 		})
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateSettingsOK{
+		Message: utils.Ptr("compose app is being applied with changes asynchroniously"),
+	})
+}
+
+// installedComposeApp resolves id to an installed app, or writes the error response and returns nil.
+func installedComposeApp(ctx echo.Context, id codegen.ComposeAppID) (*service.ComposeApp, error) {
+	if id == "" {
+		message := ErrComposeAppIDNotProvided.Error()
+		return nil, ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	composeApps, err := service.MyService.Compose().List(ctx.Request().Context())
+	if err != nil {
+		message := err.Error()
+		return nil, ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	composeApp, ok := composeApps[id]
+	if !ok {
+		message := fmt.Sprintf("compose app `%s` not found", id)
+		return nil, ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
+	}
+
+	return composeApp, nil
+}
+
+func (a *AppManagement) ComposeAppEnv(ctx echo.Context, id codegen.ComposeAppID) error {
+	composeApp, err := installedComposeApp(ctx, id)
+	if composeApp == nil {
+		return err
+	}
+
+	text, err := composeApp.EnvFileText()
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	return ctx.String(http.StatusOK, string(text))
+}
+
+func (a *AppManagement) ApplyComposeAppEnv(ctx echo.Context, id codegen.ComposeAppID, params codegen.ApplyComposeAppEnvParams) error {
+	composeApp, err := installedComposeApp(ctx, id)
+	if composeApp == nil {
+		return err
+	}
+
+	body, err := io.ReadAll(ctx.Request().Body)
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	if _, err := service.ParseEnvFile(body); err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	if params.DryRun != nil && *params.DryRun {
+		return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateSettingsOK{
+			Message: lo.ToPtr("only validation has been done because `dry_run` is specified - skipping .env update"),
+		})
+	}
+
+	if len(composeApp.ComposeFiles) == 0 {
+		message := service.ErrComposeFileNotFound.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	if err := composeApp.WriteEnvFile(body); err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	// re-create with the unchanged compose file: a restart would keep the old environment,
+	// Apply reloads the project (and with it the new .env) before bringing it up.
+	current, err := os.ReadFile(composeApp.ComposeFiles[0])
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
+
+	if err := composeApp.Apply(backgroundCtx, current); err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateSettingsOK{
