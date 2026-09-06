@@ -177,16 +177,19 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 	if err != nil {
 		// the loader names the field (`services.a.cpus`) and, since `.env` is never read here, shows
 		// the reference itself, never its value
-		return nil, fmt.Errorf("%s: %w; a .env reference is kept only in %s, for any other field edit the file on disk", configFile, err, keptFields)
+		return nil, fmt.Errorf("%s: %w; a .env reference is kept in %s; edit the file on disk for that field", configFile, err, keptFields)
 	}
 
 	return (*ComposeApp)(project), nil
 }
 
-// keptFields is where a `.env` reference survives the settings round trip: free-text fields, and
-// the two casts below. Anywhere compose needs a number, a boolean or a size, the reference cannot
-// be kept and the editing load fails instead of serving the resolved value.
-const keptFields = "environment, env_file, ports and volumes"
+// keptFields is where a `.env` reference survives the settings round trip: every free-text field
+// (environment, env_file, image, command, labels, x-casaos...) and, through the two casts below,
+// the host side of ports and volumes. Where compose needs a typed value (a number, a boolean, a
+// size, a duration: cpus, cpu_count, mem_limit, shm_size, privileged, stop_grace_period,
+// deploy.resources...) the reference cannot be kept and the editing load fails instead of serving
+// the resolved value.
+const keptFields = "every free-text field and the host side of ports and volumes, not in a typed field (a number, a boolean, a size, a duration)"
 
 // keptToken splits compose text into what the settings pipeline copies verbatim: `$$` (an escaped
 // dollar, so the name after it is not a reference), `${NAME...}` with any modifier, `$NAME`.

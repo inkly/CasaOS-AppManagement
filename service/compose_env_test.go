@@ -307,7 +307,8 @@ func TestEditingLoadNamesTheFieldThatCannotKeepDotEnv(t *testing.T) {
 		id, composeFile := installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    "+field+"\n", "CPUS=1.5\n")
 		_, err := service.LoadComposeAppForEditing(id, composeFile, keep)
 		assert.ErrorContains(t, err, strings.SplitN(field, ":", 2)[0], field)
-		assert.ErrorContains(t, err, "kept only in environment, env_file, ports and volumes", field)
+		assert.ErrorContains(t, err, "kept in every free-text field and the host side of ports and volumes, not in a typed field", field)
+		assert.ErrorContains(t, err, "edit the file on disk for that field", field)
 		assert.ErrorContains(t, err, composeFile, field)
 		assert.Assert(t, !strings.Contains(err.Error(), "1.5"), err.Error())
 	}
