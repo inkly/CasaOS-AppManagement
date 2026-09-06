@@ -476,6 +476,7 @@ paths:
         Apply settings to a compose app from the Docker Compose YAML content provided in the request.
 
         > - The request has to be `content-type: application/yaml` and the body has to follow [Compose Specification](https://compose-spec.io).
+        > - A reference to a key of the app's `.env` is copied as written (see `GET /compose/{id}` for the fields where it is kept). The keys are those of the `.env` on disk at that moment: a key has to be in `.env` (`PUT /compose/{id}/env`) before a compose referencing it is saved, otherwise the reference is baked as a literal.
         > - When `dry_run=true` is provided in the query string, it only validates the YAML content.
 
       operationId: applyComposeAppSettings
