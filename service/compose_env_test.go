@@ -357,3 +357,41 @@ func TestSettingsSaveKeepsRuntimeReferences(t *testing.T) {
 	assert.Equal(t, *env["SECRET"], "s3cr3t")
 	assert.Assert(t, *env["TZ"] != "${TZ}")
 }
+
+// a kept reference in the default of another one (`${OTHER:-$SECRET}`) was resolved to the
+// literal `${SECRET}`: GET showed `$${SECRET}` and the app lost the value after a save
+func TestSettingsRoundTripKeepsNestedDotEnvReference(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	t.Setenv("CASAOS_TEST_FROM_OS", "os")
+	id, composeFile := installedApp(t,
+		"name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    environment:\n"+
+			"      NESTED: ${OTHER:-$SECRET}\n      BRACED: ${OTHER:-${SECRET}}\n      BOTH: ${SECRET2:-$SECRET}\n"+
+			"      TAKEN: ${CASAOS_TEST_FROM_OS:-$SECRET} $SECRET2\nx-casaos:\n  title:\n    en_us: wg-easy\n",
+		"SECRET=s3cr3t\nSECRET2=other\n")
+	keep, err := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
+	assert.NilError(t, err)
+
+	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
+	assert.NilError(t, err)
+	get, err := service.GenerateYAMLFromComposeApp(*editing)
+	assert.NilError(t, err)
+	for _, want := range []string{"NESTED: $SECRET\n", "BRACED: ${SECRET}\n", "BOTH: ${SECRET2:-$SECRET}\n", "TAKEN: os $SECRET2\n"} {
+		assert.Assert(t, strings.Contains(string(get), want), "%s missing in\n%s", want, get)
+	}
+	assert.Assert(t, !strings.Contains(string(get), "s3cr3t"), string(get))
+
+	saved, err := service.ComposeAppFromSettingsYAML(get, keep)
+	assert.NilError(t, err)
+	out, err := service.GenerateYAMLFromComposeApp(*saved)
+	assert.NilError(t, err)
+	assert.Equal(t, string(out), string(get))
+
+	assert.NilError(t, os.WriteFile(composeFile, out, 0o600))
+	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
+	assert.NilError(t, err)
+	env := running.Services[id].Environment
+	assert.Equal(t, *env["NESTED"], "s3cr3t")
+	assert.Equal(t, *env["BRACED"], "s3cr3t")
+	assert.Equal(t, *env["BOTH"], "other")
+	assert.Equal(t, *env["TAKEN"], "os other")
+}

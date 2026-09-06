@@ -195,27 +195,37 @@ var keptToken = regexp.MustCompile(`\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|\$(
 // every `$` of a resolved value is escaped as `$$`, so GenerateYAMLFromComposeApp writes strings
 // as they are, and a reference to a key of keep comes back exactly as typed (`$SECRET`,
 // `${SECRET:-dflt}`, `${SECRET:?req}`, the literal `$$SECRET`) instead of collapsing to `${SECRET}`.
+// A kept reference in the default text of another one (`${OTHER:-$SECRET}`) is protected on its
+// own, so it survives when OTHER is unset; the marks are numbered, a default that is not taken
+// drops its mark without shifting the others.
 func substituteEscaping(keep map[string]struct{}) func(string, template.Mapping) (string, error) {
 	const mark = "\x00" // never in YAML text
 	return func(text string, mapping template.Mapping) (string, error) {
 		var kept []string
-		protected := keptToken.ReplaceAllStringFunc(text, func(token string) string {
-			m := keptToken.FindStringSubmatch(token)
-			if _, ok := keep[m[1]+m[2]]; !ok {
-				return token
-			}
-			kept = append(kept, token)
-			return mark
-		})
+		var protect func(string) string
+		protect = func(text string) string {
+			return keptToken.ReplaceAllStringFunc(text, func(token string) string {
+				m := keptToken.FindStringSubmatch(token)
+				if _, ok := keep[m[1]+m[2]]; ok {
+					kept = append(kept, token)
+					return mark + strconv.Itoa(len(kept)-1) + mark
+				}
+				if m[1] == "" {
+					return token // `$$` or `$NAME`: nothing nested
+				}
+				head := "${" + m[1]
+				return head + protect(token[len(head):])
+			})
+		}
 
-		resolved, err := template.Substitute(protected, mapping)
+		resolved, err := template.Substitute(protect(text), mapping)
 		if err != nil {
 			return "", err
 		}
 
 		resolved = strings.ReplaceAll(resolved, "$", "$$")
-		for _, token := range kept {
-			resolved = strings.Replace(resolved, mark, token, 1)
+		for i, token := range kept {
+			resolved = strings.ReplaceAll(resolved, mark+strconv.Itoa(i)+mark, token)
 		}
 		return resolved, nil
 	}
