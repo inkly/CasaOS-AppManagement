@@ -10,7 +10,7 @@ import (
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"gotest.tools/v3/assert"
 )
 
@@ -55,11 +55,14 @@ func TestPullAndApplyRestoresDotEnvOnFailure(t *testing.T) {
 
 	// loads and pulls, then the daemon refuses the container: the app failed to start, both
 	// files go back. Before, success was recorded before the start was examined.
-	service, client, err := apiService()
+	_, client, err := apiService()
 	assert.NilError(t, err)
 	defer client.Close()
+	// cleaned up through the daemon client, not compose's Down: compose-go's WithServicesTransform
+	// races with itself under -race (compose-go v2.1.0 types/project.go:679) and fails the run
 	t.Cleanup(func() {
-		_ = service.Down(context.Background(), a.Name, api.DownOptions{RemoveOrphans: true})
+		_ = client.ContainerRemove(context.Background(), a.Name+"-a-1", container.RemoveOptions{Force: true})
+		_ = client.NetworkRemove(context.Background(), a.Name+"_default")
 	})
 	unstartable := []byte("name: casaos-env-test\nservices:\n  a:\n    image: alpine:3.20\n    cap_add:\n      - NOT_A_CAP\n")
 	assert.NilError(t, os.WriteFile(a.EnvFile(), []byte("OLD=1\n"), 0o600))
