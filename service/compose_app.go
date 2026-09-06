@@ -1036,6 +1036,7 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 		func(o *loader.Options) {
 			o.SkipInterpolation = skipInterpolation
 			o.SkipValidation = skipValidation
+			keepPortRefs(o)
 
 			o.Interpolate.LookupValue = func(key string) (string, bool) {
 				if _, ok := keep[key]; ok {

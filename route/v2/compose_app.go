@@ -59,14 +59,13 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 
 	accept := ctx.Request().Header.Get(echo.HeaderAccept)
 	if accept == common.MIMEApplicationYAML {
-		// the editor must see `${KEY}` for what `.env` defines, not the resolved value, or the
-		// next save bakes it into docker-compose.yml. Fall back to the resolved app when a kept
-		// reference sits where compose needs a real value (e.g. `${PORT}:80` in ports).
+		// the editor must see `${KEY}` for what `.env` defines, never the resolved value: the next
+		// save would bake it into docker-compose.yml. No fallback to the resolved app for that reason.
 		keep := composeApp.EnvKeys()
 		editing, err := service.LoadComposeAppForEditing(id, composeApp.ComposeFiles[0], keep)
 		if err != nil {
-			logger.Error("failed to load compose app with .env references kept, showing resolved values", zap.Error(err), zap.String("id", id))
-			editing = composeApp
+			message := fmt.Sprintf("failed to load compose app with its .env references kept: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 		}
 
 		// generate yaml should to replace all yaml.Marshal. But for now, we just use it Setting Page API

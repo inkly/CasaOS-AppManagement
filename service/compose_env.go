@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/dotenv"
+	"github.com/compose-spec/compose-go/v2/interpolation"
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/tree"
+	"github.com/compose-spec/compose-go/v2/types"
 )
 
 // EnvFile is the `.env` docker compose reads next to the compose file of an installed app.
@@ -90,6 +96,7 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 		cli.WithName(appID),
 		cli.WithLoadOptions(func(o *loader.Options) {
 			o.SkipValidation = true
+			keepPortRefs(o)
 			resolve := o.Interpolate.LookupValue
 			o.Interpolate.LookupValue = func(key string) (string, bool) {
 				if _, ok := keep[key]; ok {
@@ -109,4 +116,62 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 	}
 
 	return (*ComposeApp)(project), nil
+}
+
+var keptRef = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+
+// keepPortRefs registers keptPortSyntax on `services.*.ports.*`.
+func keepPortRefs(o *loader.Options) {
+	casts := map[tree.Path]interpolation.Cast{}
+	for path, cast := range o.Interpolate.TypeCastMapping { // the default mapping is shared, copy it
+		casts[path] = cast
+	}
+	casts[tree.NewPath("services", tree.PathMatchAll, "ports", tree.PathMatchList)] = keptPortSyntax
+	o.Interpolate.TypeCastMapping = casts
+}
+
+// keptPortSyntax runs on each port right after interpolation, where compose parses the short
+// syntax and refuses `${PORT}:80` ("invalid hostPort"). A kept reference is moved to the long
+// syntax, where `published` is free text docker resolves from `.env` at run time: the reference
+// is swapped for a port number to parse, then put back.
+// ponytail: a reference in the container port (`80:${TARGET}`) has no text form, it is an error.
+func keptPortSyntax(value string) (any, error) {
+	if !strings.Contains(value, "${") {
+		return value, nil
+	}
+
+	var refs []string
+	resolved := keptRef.ReplaceAllStringFunc(value, func(ref string) string {
+		refs = append(refs, ref)
+		return strconv.Itoa(65000 + len(refs))
+	})
+
+	parsed, err := types.ParsePortConfig(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", value, err)
+	}
+	if len(parsed) != 1 {
+		return nil, fmt.Errorf("%s: a port range cannot keep a .env reference", value)
+	}
+
+	port := parsed[0]
+	restored := 0
+	for i, ref := range refs {
+		placeholder := strconv.Itoa(65001 + i)
+		for _, field := range []*string{&port.Published, &port.HostIP} {
+			if strings.Contains(*field, placeholder) {
+				*field = strings.ReplaceAll(*field, placeholder, ref)
+				restored++
+			}
+		}
+	}
+	if restored != len(refs) {
+		return nil, fmt.Errorf("%s: only the host side of a port can reference .env", value)
+	}
+
+	long := map[string]any{"target": port.Target, "published": port.Published, "protocol": port.Protocol, "mode": port.Mode}
+	if port.HostIP != "" {
+		long["host_ip"] = port.HostIP
+	}
+	return long, nil
 }
