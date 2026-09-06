@@ -384,14 +384,17 @@ func TestSettingsSaveKeepsRuntimeReferences(t *testing.T) {
 }
 
 // a kept reference in the default of another one (`${OTHER:-$SECRET}`) was resolved to the
-// literal `${SECRET}`: GET showed `$${SECRET}` and the app lost the value after a save
+// literal `${SECRET}`: GET showed `$${SECRET}` and the app lost the value after a save. The whole
+// token is kept as written: resolving the outer one dropped the wrapper on disk (`$SECRET` for
+// `${OTHER:-$SECRET}`) and failed GET on `${OTHER:?need $SECRET}`.
 func TestSettingsRoundTripKeepsNestedDotEnvReference(t *testing.T) {
 	logger.LogInitConsoleOnly()
 	t.Setenv("CASAOS_TEST_FROM_OS", "os")
+	spellings := []string{"NESTED: ${OTHER:-$SECRET}", "BRACED: ${OTHER:-${SECRET}}", "REQ: ${OTHER:?need $SECRET}", "BOTH: ${SECRET2:-$SECRET}",
+		"MIXED: ${OTHER:-$SECRET} $SECRET2", "TAKEN: ${CASAOS_TEST_FROM_OS:-$SECRET} $SECRET2", "PLAIN: ${OTHER:-plain}"}
 	id, composeFile := installedApp(t,
-		"name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    environment:\n"+
-			"      NESTED: ${OTHER:-$SECRET}\n      BRACED: ${OTHER:-${SECRET}}\n      BOTH: ${SECRET2:-$SECRET}\n"+
-			"      TAKEN: ${CASAOS_TEST_FROM_OS:-$SECRET} $SECRET2\nx-casaos:\n  title:\n    en_us: wg-easy\n",
+		"name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    environment:\n      "+
+			strings.Join(spellings, "\n      ")+"\nx-casaos:\n  title:\n    en_us: wg-easy\n",
 		"SECRET=s3cr3t\nSECRET2=other\n")
 	keep, err := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
 	assert.NilError(t, err)
@@ -400,9 +403,10 @@ func TestSettingsRoundTripKeepsNestedDotEnvReference(t *testing.T) {
 	assert.NilError(t, err)
 	get, err := service.GenerateYAMLFromComposeApp(*editing)
 	assert.NilError(t, err)
-	for _, want := range []string{"NESTED: $SECRET\n", "BRACED: ${SECRET}\n", "BOTH: ${SECRET2:-$SECRET}\n", "TAKEN: os $SECRET2\n"} {
-		assert.Assert(t, strings.Contains(string(get), want), "%s missing in\n%s", want, get)
+	for _, want := range spellings[:len(spellings)-1] {
+		assert.Assert(t, strings.Contains(string(get), want+"\n"), "%s missing in\n%s", want, get)
 	}
+	assert.Assert(t, strings.Contains(string(get), "PLAIN: plain\n"), string(get)) // no kept reference inside: resolved as before
 	assert.Assert(t, !strings.Contains(string(get), "s3cr3t"), string(get))
 
 	saved, err := service.ComposeAppFromSettingsYAML(get, keep)
@@ -411,12 +415,27 @@ func TestSettingsRoundTripKeepsNestedDotEnvReference(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(out), string(get))
 
+	// the runtime evaluates what was kept: OTHER unset, then set later in the OS environment
 	assert.NilError(t, os.WriteFile(composeFile, out, 0o600))
+	_, err = service.LoadComposeAppFromConfigFile(id, composeFile)
+	assert.ErrorContains(t, err, "need s3cr3t")
+	assert.NilError(t, os.WriteFile(composeFile, []byte(strings.Replace(string(out), "REQ: ${OTHER:?need $SECRET}", "REQ: x", 1)), 0o600))
 	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
 	assert.NilError(t, err)
 	env := running.Services[id].Environment
 	assert.Equal(t, *env["NESTED"], "s3cr3t")
 	assert.Equal(t, *env["BRACED"], "s3cr3t")
 	assert.Equal(t, *env["BOTH"], "other")
+	assert.Equal(t, *env["MIXED"], "s3cr3t other")
 	assert.Equal(t, *env["TAKEN"], "os other")
+	assert.Equal(t, *env["PLAIN"], "plain")
+
+	t.Setenv("OTHER", "later")
+	assert.NilError(t, os.WriteFile(composeFile, out, 0o600))
+	running, err = service.LoadComposeAppFromConfigFile(id, composeFile)
+	assert.NilError(t, err)
+	env = running.Services[id].Environment
+	assert.Equal(t, *env["NESTED"], "later")
+	assert.Equal(t, *env["REQ"], "later")
+	assert.Equal(t, *env["PLAIN"], "plain") // baked by GET, OTHER no longer applies
 }
