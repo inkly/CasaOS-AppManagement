@@ -1086,7 +1086,7 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 			if keep != nil {
 				keepPathRefs(o)
 				keepRefCasts(o)
-				o.Interpolate.Substitute = substituteEscaping(keep)
+				o.Interpolate.Substitute = substituteEscaping(settingsKeep(keep))
 			}
 
 			o.Interpolate.LookupValue = func(key string) (string, bool) {

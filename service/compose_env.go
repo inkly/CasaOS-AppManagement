@@ -127,6 +127,22 @@ func keepRefs(keep map[string]struct{}) map[string]string {
 	return refs
 }
 
+// settingsKeep is the keep-set of the settings parse: the `.env` keys plus the keys the runtime
+// defines (AppID, TZ, PUID...), so `$AppID` typed in a volume path stays for the runtime to resolve
+// (the App Store idiom) instead of being baked as the literal `$$AppID`. WEBUI_PORT is not one of
+// them: the settings parse allocates it on purpose (newComposeAppFromYAML). The editing load keeps
+// only the `.env` keys: the editor shows the value the runtime uses for the others.
+func settingsKeep(keep map[string]struct{}) map[string]struct{} {
+	all := map[string]struct{}{"AppID": {}}
+	for k := range keep {
+		all[k] = struct{}{}
+	}
+	for k := range baseInterpolationMap() {
+		all[k] = struct{}{}
+	}
+	return all
+}
+
 // LoadComposeAppForEditing loads an installed app for the settings editor: `${KEY}` references
 // and bare `KEY` entries for a key in keep come out as `${KEY}`, and `.env` itself is never read.
 // LoadComposeAppFromConfigFile (what docker runs) keeps resolving everything.

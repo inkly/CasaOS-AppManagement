@@ -321,3 +321,39 @@ func TestEditingLoadNamesTheFieldThatCannotKeepDotEnv(t *testing.T) {
 	assert.Equal(t, saved.Services[id].EnvFiles[0].Path, "${ENVF}")
 	assert.Equal(t, *running.Services[id].Environment["A"], "1")
 }
+
+// a reference to a key the runtime defines (`$AppID` in a volume path, `${TZ}`, `$PUID`) survives
+// a settings save as typed, for the runtime to resolve: the App Store idiom, which 0f45aaf broke by
+// baking `$$AppID`. WEBUI_PORT is the exception, allocated at save time.
+func TestSettingsSaveKeepsRuntimeReferences(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	keep := map[string]struct{}{"SECRET": {}}
+	save := func(yaml string) string {
+		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
+		assert.NilError(t, err)
+		out, err := service.GenerateYAMLFromComposeApp(*app)
+		assert.NilError(t, err)
+		return string(out)
+	}
+
+	spellings := []string{"TZ: ${TZ}", "PUID: $PUID", "APP: ${AppID}", "SECRET: ${SECRET}"}
+	saved := save("name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    volumes:\n      - /DATA/AppData/$AppID/config:/config\n" +
+		"    environment:\n      " + strings.Join(spellings, "\n      ") + "\n      PORT: ${WEBUI_PORT}\nx-casaos:\n  title:\n    en_us: wg-easy\n")
+	for _, spelling := range append(spellings, "source: /DATA/AppData/$AppID/config") {
+		assert.Assert(t, strings.Contains(saved, spelling), "%s lost in\n%s", spelling, saved)
+	}
+	assert.Assert(t, !strings.Contains(saved, "$$"), saved)
+	assert.Assert(t, !strings.Contains(saved, "WEBUI_PORT"), saved) // baked to a free port
+	assert.Equal(t, save(saved), saved)
+
+	// and the runtime resolves what was typed
+	id, composeFile := installedApp(t, saved, "SECRET=s3cr3t\n")
+	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
+	assert.NilError(t, err)
+	assert.Equal(t, running.Services[id].Volumes[0].Source, "/DATA/AppData/wg-easy/config")
+	env := running.Services[id].Environment
+	assert.Equal(t, *env["PUID"], common.DefaultPUID)
+	assert.Equal(t, *env["APP"], "wg-easy")
+	assert.Equal(t, *env["SECRET"], "s3cr3t")
+	assert.Assert(t, *env["TZ"] != "${TZ}")
+}
