@@ -467,12 +467,27 @@ func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Service
 }
 
 func (a *ComposeApp) PullAndApply(ctx context.Context, newComposeYAML []byte) error {
+	return a.pullAndApply(ctx, newComposeYAML, nil)
+}
+
+// pullAndApply writes the new compose file and, when newEnv is not nil, the new `.env` (empty
+// removes it), then pulls and (re)creates the app; both files are put back if that fails, so disk
+// and running state never diverge.
+func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, newEnv *[]byte) error {
 	// backup current compose file
 	currentComposeFile := a.ComposeFiles[0]
 
 	backupComposeFile := currentComposeFile + "." + "bak"
 	if err := file.CopySingleFile(currentComposeFile, backupComposeFile, ""); err != nil {
 		return err
+	}
+
+	var oldEnv []byte // nil when there was none: WriteEnvFile(nil) removes
+	if newEnv != nil {
+		var err error
+		if oldEnv, err = a.EnvFileText(); err != nil {
+			return err
+		}
 	}
 
 	// start compose app
@@ -491,6 +506,13 @@ func (a *ComposeApp) PullAndApply(ctx context.Context, newComposeYAML []byte) er
 				return
 			}
 
+			if newEnv != nil {
+				if err := a.WriteEnvFile(oldEnv); err != nil {
+					logger.Error("failed to restore original .env", zap.Error(err), zap.String("path", a.EnvFile()))
+					return
+				}
+			}
+
 			if err := a.Up(ctx, service); err != nil {
 				logger.Error("failed to start original compose app", zap.Error(err), zap.String("name", a.Name))
 				return
@@ -502,6 +524,12 @@ func (a *ComposeApp) PullAndApply(ctx context.Context, newComposeYAML []byte) er
 	// save new compose file
 	if err := file.WriteToFullPath(newComposeYAML, currentComposeFile, 0o600); err != nil {
 		return err
+	}
+
+	if newEnv != nil {
+		if err := a.WriteEnvFile(*newEnv); err != nil {
+			return err
+		}
 	}
 
 	newComposeApp, err := LoadComposeAppFromConfigFile(a.Name, currentComposeFile)
@@ -679,6 +707,25 @@ func (a *ComposeApp) Uninstall(ctx context.Context, deleteConfigFolder bool) err
 }
 
 func (a *ComposeApp) Apply(ctx context.Context, newComposeYAML []byte) error {
+	return a.apply(ctx, newComposeYAML, nil)
+}
+
+// ApplyEnv replaces the `.env` of the app (empty removes it) and re-creates it from its unchanged
+// compose file: a restart would keep the old environment, the apply reloads the project first.
+func (a *ComposeApp) ApplyEnv(ctx context.Context, env []byte) error {
+	if len(a.ComposeFiles) <= 0 {
+		return ErrComposeFileNotFound
+	}
+
+	current, err := os.ReadFile(a.ComposeFiles[0])
+	if err != nil {
+		return err
+	}
+
+	return a.apply(ctx, current, &env)
+}
+
+func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[]byte) error {
 	// compare new ComposeApp with current ComposeApp
 	if getNameFrom(newComposeYAML) != a.Name {
 		return ErrComposeAppNotMatch
@@ -711,7 +758,7 @@ func (a *ComposeApp) Apply(ctx context.Context, newComposeYAML []byte) error {
 
 		defer PublishEventWrapper(ctx, common.EventTypeAppApplyChangesEnd, nil)
 
-		if err := a.PullAndApply(ctx, newComposeYAML); err != nil {
+		if err := a.pullAndApply(ctx, newComposeYAML, newEnv); err != nil {
 			go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesError, map[string]string{
 				common.PropertyTypeMessage.Name: err.Error(),
 			})

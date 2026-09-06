@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
@@ -344,27 +343,9 @@ func (a *AppManagement) ApplyComposeAppEnv(ctx echo.Context, id codegen.ComposeA
 		return err
 	}
 
-	if len(composeApp.ComposeFiles) == 0 {
-		message := service.ErrComposeFileNotFound.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
-	}
-
-	if err := composeApp.WriteEnvFile(body); err != nil {
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
-	}
-
-	// re-create with the unchanged compose file: a restart would keep the old environment,
-	// Apply reloads the project (and with it the new .env) before bringing it up.
-	current, err := os.ReadFile(composeApp.ComposeFiles[0])
-	if err != nil {
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
-	}
-
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
-	if err := composeApp.Apply(backgroundCtx, current); err != nil {
+	if err := composeApp.ApplyEnv(backgroundCtx, body); err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
