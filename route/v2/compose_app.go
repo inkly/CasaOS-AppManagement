@@ -322,11 +322,7 @@ func (a *AppManagement) ComposeAppEnv(ctx echo.Context, id codegen.ComposeAppID)
 }
 
 func (a *AppManagement) ApplyComposeAppEnv(ctx echo.Context, id codegen.ComposeAppID, params codegen.ApplyComposeAppEnvParams) error {
-	composeApp, err := installedComposeApp(ctx, id)
-	if composeApp == nil {
-		return err
-	}
-
+	// the body is validated before the app is resolved: `dry_run` needs nothing else
 	body, err := io.ReadAll(ctx.Request().Body)
 	if err != nil {
 		message := err.Error()
@@ -342,6 +338,11 @@ func (a *AppManagement) ApplyComposeAppEnv(ctx echo.Context, id codegen.ComposeA
 		return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateSettingsOK{
 			Message: lo.ToPtr("only validation has been done because `dry_run` is specified - skipping .env update"),
 		})
+	}
+
+	composeApp, err := installedComposeApp(ctx, id)
+	if composeApp == nil {
+		return err
 	}
 
 	if len(composeApp.ComposeFiles) == 0 {

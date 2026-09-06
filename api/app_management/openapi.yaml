@@ -561,7 +561,7 @@ paths:
         Writes the request body as the `.env` file of the app, then re-creates the app so the new values are picked up.
 
         > - The request has to be `content-type: text/plain` and the body is the whole file, one `KEY=VALUE` per line as docker compose reads it.
-        > - An empty body removes the file.
+        > - An empty (or missing) body removes the file.
         > - When `dry_run=true` is provided in the query string, the body is only validated.
       operationId: applyComposeAppEnv
       tags:
@@ -570,8 +570,8 @@ paths:
         - $ref: "#/components/parameters/ComposeAppID"
         - $ref: "#/components/parameters/DryRun"
       requestBody:
-        description: Content of the `.env` file
-        required: true
+        description: Content of the `.env` file; empty or absent to remove it
+        required: false
         content:
           text/plain:
             schema:
