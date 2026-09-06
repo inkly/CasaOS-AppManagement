@@ -258,7 +258,7 @@ func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, er
 		return nil, err
 	}
 
-	local, err := LoadComposeAppForEditing(a.Name, a.ComposeFiles[0], settingsKeep(keys))
+	local, err := LoadComposeAppForEditing(a.Name, a.ComposeFiles[0], keys)
 	if err != nil {
 		return nil, err
 	}

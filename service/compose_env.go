@@ -130,8 +130,10 @@ func keepRefs(keep map[string]struct{}) map[string]string {
 // settingsKeep is the keep-set of the settings parse: the `.env` keys plus the keys the runtime
 // defines (AppID, TZ, PUID...), so `$AppID` typed in a volume path stays for the runtime to resolve
 // (the App Store idiom) instead of being baked as the literal `$$AppID`. WEBUI_PORT is not one of
-// them: the settings parse allocates it on purpose (newComposeAppFromYAML). The editing load keeps
-// only the `.env` keys: the editor shows the value the runtime uses for the others.
+// them: the settings parse allocates it on purpose (newComposeAppFromYAML). The editing load uses
+// the same set, so a runtime reference survives any number of GET/PUT round trips: keeping it on
+// the save only, the next GET baked `/DATA/AppData/wg-easy/config`, `PUID: "1000"` and the zone of
+// the moment into the editor, and the save after that into the file.
 func settingsKeep(keep map[string]struct{}) map[string]struct{} {
 	all := map[string]struct{}{"AppID": {}}
 	for k := range keep {
@@ -143,14 +145,13 @@ func settingsKeep(keep map[string]struct{}) map[string]struct{} {
 	return all
 }
 
-// LoadComposeAppForEditing loads an installed app for the settings editor: `${KEY}` references
-// and bare `KEY` entries for a key in keep come out as `${KEY}`, and `.env` itself is never read.
-// LoadComposeAppFromConfigFile (what docker runs) keeps resolving everything.
+// LoadComposeAppForEditing loads an installed app for the settings editor: a reference to a key
+// of keep or to a key the runtime defines (settingsKeep) comes out as written, a bare `KEY` entry
+// for one of them as `${KEY}`, and `.env` itself is never read. LoadComposeAppFromConfigFile (what
+// docker runs) keeps resolving everything.
 func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}) (*ComposeApp, error) {
-	env := []string{fmt.Sprintf("%s=%s", "AppID", appID)}
-	for k, v := range baseInterpolationMap() {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
+	keep = settingsKeep(keep)
+	env := []string{}
 	for k, v := range keepRefs(keep) {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}

@@ -65,7 +65,7 @@ func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 	assert.Assert(t, !strings.Contains(string(get), "s3cr3t"), string(get))
 	assert.Assert(t, strings.Contains(string(get), "PASSWORD_HASH: $$2a$$12$$zBIMbL5/"), string(get)) // still escaped exactly once
 	assert.Assert(t, strings.Contains(string(get), "BARE: ${BARE}"), string(get))                     // bare key becomes an explicit reference
-	assert.Assert(t, !strings.Contains(string(get), "TZ: ${TZ}"), string(get))                      // the runtime value, as docker sees it
+	assert.Assert(t, strings.Contains(string(get), "TZ: ${TZ}"), string(get))                         // a runtime reference, as the file has it
 
 	save := func(yaml string) string {
 		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
@@ -324,7 +324,9 @@ func TestEditingLoadNamesTheFieldThatCannotKeepDotEnv(t *testing.T) {
 
 // a reference to a key the runtime defines (`$AppID` in a volume path, `${TZ}`, `$PUID`) survives
 // a settings save as typed, for the runtime to resolve: the App Store idiom, which 0f45aaf broke by
-// baking `$$AppID`. WEBUI_PORT is the exception, allocated at save time.
+// baking `$$AppID`. WEBUI_PORT is the exception, allocated at save time. And it survives every
+// GET/PUT after that: the editing load kept only the .env keys, so the second save baked the
+// literals the first one had kept.
 func TestSettingsSaveKeepsRuntimeReferences(t *testing.T) {
 	logger.LogInitConsoleOnly()
 	keep := map[string]struct{}{"SECRET": {}}
@@ -336,7 +338,8 @@ func TestSettingsSaveKeepsRuntimeReferences(t *testing.T) {
 		return string(out)
 	}
 
-	spellings := []string{"TZ: ${TZ}", "PUID: $PUID", "APP: ${AppID}", "SECRET: ${SECRET}"}
+	spellings := []string{"TZ: ${TZ}", "PUID: $PUID", "GID: ${PGID}", "USER: ${DefaultUserName}", "APP: ${AppID}", "SECRET: ${SECRET}",
+		"LITERAL_PUID: \"1000\"", "LITERAL_APP: /DATA/AppData/wg-easy"}
 	saved := save("name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    volumes:\n      - /DATA/AppData/$AppID/config:/config\n" +
 		"    environment:\n      " + strings.Join(spellings, "\n      ") + "\n      PORT: ${WEBUI_PORT}\nx-casaos:\n  title:\n    en_us: wg-easy\n")
 	for _, spelling := range append(spellings, "source: /DATA/AppData/$AppID/config") {
@@ -348,14 +351,36 @@ func TestSettingsSaveKeepsRuntimeReferences(t *testing.T) {
 
 	// and the runtime resolves what was typed
 	id, composeFile := installedApp(t, saved, "SECRET=s3cr3t\n")
-	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
-	assert.NilError(t, err)
-	assert.Equal(t, running.Services[id].Volumes[0].Source, "/DATA/AppData/wg-easy/config")
-	env := running.Services[id].Environment
-	assert.Equal(t, *env["PUID"], common.DefaultPUID)
-	assert.Equal(t, *env["APP"], "wg-easy")
-	assert.Equal(t, *env["SECRET"], "s3cr3t")
-	assert.Assert(t, *env["TZ"] != "${TZ}")
+	resolves := func() {
+		t.Helper()
+		running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
+		assert.NilError(t, err)
+		assert.Equal(t, running.Services[id].Volumes[0].Source, "/DATA/AppData/wg-easy/config")
+		env := running.Services[id].Environment
+		assert.Equal(t, *env["PUID"], common.DefaultPUID)
+		assert.Equal(t, *env["GID"], common.DefaultPGID)
+		assert.Equal(t, *env["USER"], common.DefaultUserName)
+		assert.Equal(t, *env["APP"], "wg-easy")
+		assert.Equal(t, *env["SECRET"], "s3cr3t")
+		assert.Assert(t, *env["TZ"] != "${TZ}")
+	}
+	resolves()
+
+	// GET shows the file as it is, a reference where it has one and a literal where it has one;
+	// PUT of that changes nothing on disk, and GET of that is the same again
+	get := func() string {
+		t.Helper()
+		editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
+		assert.NilError(t, err)
+		out, err := service.GenerateYAMLFromComposeApp(*editing)
+		assert.NilError(t, err)
+		return string(out)
+	}
+	assert.Equal(t, get(), saved)
+	assert.Equal(t, save(get()), saved)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(save(get())), 0o600))
+	assert.Equal(t, get(), saved)
+	resolves()
 }
 
 // a kept reference in the default of another one (`${OTHER:-$SECRET}`) was resolved to the
