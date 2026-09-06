@@ -15,6 +15,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/interpolation"
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/tree"
 	"github.com/compose-spec/compose-go/v2/types"
 )
@@ -97,13 +98,7 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 		cli.WithLoadOptions(func(o *loader.Options) {
 			o.SkipValidation = true
 			keepPortRefs(o)
-			resolve := o.Interpolate.LookupValue
-			o.Interpolate.LookupValue = func(key string) (string, bool) {
-				if _, ok := keep[key]; ok {
-					return "${" + key + "}", true
-				}
-				return resolve(key)
-			}
+			o.Interpolate.Substitute = substituteEscaping(keep)
 		}),
 	)
 	if err != nil {
@@ -118,7 +113,39 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 	return (*ComposeApp)(project), nil
 }
 
-var keptRef = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+// keptToken splits compose text into what the settings pipeline copies verbatim: `$$` (an escaped
+// dollar, so the name after it is not a reference), `${NAME...}` with any modifier, `$NAME`.
+var keptToken = regexp.MustCompile(`\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// substituteEscaping interpolates for the settings pipeline, whose output is compose text again:
+// every `$` of a resolved value is escaped as `$$`, so GenerateYAMLFromComposeApp writes strings
+// as they are, and a reference to a key of keep comes back exactly as typed (`$SECRET`,
+// `${SECRET:-dflt}`, `${SECRET:?req}`, the literal `$$SECRET`) instead of collapsing to `${SECRET}`.
+func substituteEscaping(keep map[string]struct{}) func(string, template.Mapping) (string, error) {
+	const mark = "\x00" // never in YAML text
+	return func(text string, mapping template.Mapping) (string, error) {
+		var kept []string
+		protected := keptToken.ReplaceAllStringFunc(text, func(token string) string {
+			m := keptToken.FindStringSubmatch(token)
+			if _, ok := keep[m[1]+m[2]]; !ok {
+				return token
+			}
+			kept = append(kept, token)
+			return mark
+		})
+
+		resolved, err := template.Substitute(protected, mapping)
+		if err != nil {
+			return "", err
+		}
+
+		resolved = strings.ReplaceAll(resolved, "$", "$$")
+		for _, token := range kept {
+			resolved = strings.Replace(resolved, mark, token, 1)
+		}
+		return resolved, nil
+	}
+}
 
 // keepPortRefs registers keptPortSyntax on `services.*.ports.*`.
 func keepPortRefs(o *loader.Options) {
@@ -136,12 +163,12 @@ func keepPortRefs(o *loader.Options) {
 // is swapped for a port number to parse, then put back.
 // ponytail: a reference in the container port (`80:${TARGET}`) has no text form, it is an error.
 func keptPortSyntax(value string) (any, error) {
-	if !strings.Contains(value, "${") {
+	if !strings.Contains(value, "$") {
 		return value, nil
 	}
 
 	var refs []string
-	resolved := keptRef.ReplaceAllStringFunc(value, func(ref string) string {
+	resolved := keptToken.ReplaceAllStringFunc(value, func(ref string) string {
 		refs = append(refs, ref)
 		return strconv.Itoa(65000 + len(refs))
 	})

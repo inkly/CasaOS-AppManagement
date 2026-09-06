@@ -1007,8 +1007,8 @@ func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) 
 	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil)
 }
 
-// keep lists the names whose `${NAME}` references must survive interpolation as references
-// (see ComposeApp.EnvKeys); nil resolves everything as before.
+// keep is non-nil for the settings pipeline (ComposeAppFromSettingsYAML): the output is compose
+// text again, see substituteEscaping. nil resolves everything as before.
 func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}) (*ComposeApp, error) {
 	tmpWorkingDir, err := os.MkdirTemp("", "casaos-compose-app-*")
 	if err != nil {
@@ -1036,13 +1036,12 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 		func(o *loader.Options) {
 			o.SkipInterpolation = skipInterpolation
 			o.SkipValidation = skipValidation
-			keepPortRefs(o)
+			if keep != nil {
+				keepPortRefs(o)
+				o.Interpolate.Substitute = substituteEscaping(keep)
+			}
 
 			o.Interpolate.LookupValue = func(key string) (string, bool) {
-				if _, ok := keep[key]; ok {
-					return "${" + key + "}", true
-				}
-
 				switch key {
 				case "WEBUI_PORT":
 					fmt.Printf("WEBUI_PORT is not specified, using %d\n", port)

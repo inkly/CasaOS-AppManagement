@@ -57,7 +57,7 @@ func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 
 	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
 	assert.NilError(t, err)
-	get, err := service.GenerateYAMLFromComposeApp(*editing, keep)
+	get, err := service.GenerateYAMLFromComposeApp(*editing)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(get), "SECRET: ${SECRET}"), string(get))
 	assert.Assert(t, !strings.Contains(string(get), "s3cr3t"), string(get))
@@ -67,7 +67,7 @@ func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 	save := func(yaml string) string {
 		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
 		assert.NilError(t, err)
-		out, err := service.GenerateYAMLFromComposeApp(*app, keep)
+		out, err := service.GenerateYAMLFromComposeApp(*app)
 		assert.NilError(t, err)
 		return string(out)
 	}
@@ -76,8 +76,8 @@ func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 	// what the user types: a reference to a .env key stays one, anything else is a literal
 	typed := save("name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    environment:\n" +
 		"      SECRET: $SECRET\n      OTHER: ${UNKNOWN} $SECRET\nx-casaos:\n  title:\n    en_us: wg-easy\n")
-	assert.Assert(t, strings.Contains(typed, "SECRET: ${SECRET}"), typed)
-	assert.Assert(t, strings.Contains(typed, "OTHER: $$UNKNOWN ${SECRET}"), typed)
+	assert.Assert(t, strings.Contains(typed, "SECRET: $SECRET"), typed)
+	assert.Assert(t, strings.Contains(typed, "OTHER: $$UNKNOWN $SECRET"), typed)
 }
 
 func TestParseEnvFile(t *testing.T) {
@@ -124,9 +124,9 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 
 	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
 	assert.NilError(t, err)
-	get, err := service.GenerateYAMLFromComposeApp(*editing, keep)
+	get, err := service.GenerateYAMLFromComposeApp(*editing)
 	assert.NilError(t, err)
-	for _, want := range []string{"published: ${PORT}", "target: 80", "target: 81", "protocol: udp", "host_ip: 127.0.0.1", "published: \"9000\"", "SECRET: ${SECRET}"} {
+	for _, want := range []string{"published: ${PORT}", "published: $PORT", "target: 80", "target: 81", "protocol: udp", "host_ip: 127.0.0.1", "published: \"9000\"", "SECRET: ${SECRET}"} {
 		assert.Assert(t, strings.Contains(string(get), want), "%s missing in\n%s", want, get)
 	}
 	for _, leak := range []string{"8080", "s3cr3t"} {
@@ -137,7 +137,7 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 	save := func(yaml string) string {
 		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
 		assert.NilError(t, err)
-		out, err := service.GenerateYAMLFromComposeApp(*app, keep)
+		out, err := service.GenerateYAMLFromComposeApp(*app)
 		assert.NilError(t, err)
 		return string(out)
 	}
@@ -154,4 +154,46 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 	_, composeFile = installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    ports:\n      - 80:${PORT}\n", "PORT=8080\n")
 	_, err = service.LoadComposeAppForEditing(id, composeFile, keep)
 	assert.ErrorContains(t, err, "only the host side")
+}
+
+// the user's spelling of a kept reference survives the round trip: interpolation would collapse
+// `$$SECRET` (a literal) to `${SECRET}` and drop the modifier of `${SECRET:-dflt}`.
+func TestSettingsRoundTripKeepsDotEnvSpelling(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	keep := map[string]struct{}{"SECRET": {}}
+	save := func(yaml string) string {
+		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
+		assert.NilError(t, err)
+		out, err := service.GenerateYAMLFromComposeApp(*app)
+		assert.NilError(t, err)
+		return string(out)
+	}
+
+	spellings := []string{"REF: ${SECRET}", "SHORT: $SECRET", "DFLT: ${SECRET:-dflt}", "REQ: ${SECRET:?req}", "LITERAL: $$SECRET",
+		"MIXED: $$SECRET is not ${SECRET}", "OTHER: $$OTHER $$UNKNOWN"}
+	typed := "name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    environment:\n      " +
+		strings.Join(spellings, "\n      ") + "\nx-casaos:\n  title:\n    en_us: wg-easy\n"
+	saved := save(typed)
+	for _, spelling := range spellings {
+		assert.Assert(t, strings.Contains(saved, spelling), "%s lost in\n%s", spelling, saved)
+	}
+	assert.Equal(t, save(saved), saved)
+
+	// and docker reads what was typed
+	id, composeFile := installedApp(t, saved, "SECRET=s3cr3t\n")
+	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
+	assert.NilError(t, err)
+	env := running.Services[id].Environment
+	assert.Equal(t, *env["REF"], "s3cr3t")
+	assert.Equal(t, *env["DFLT"], "s3cr3t")
+	assert.Equal(t, *env["REQ"], "s3cr3t")
+	assert.Equal(t, *env["LITERAL"], "$SECRET")
+	assert.Equal(t, *env["MIXED"], "$SECRET is not s3cr3t")
+
+	// what GET shows for the same file
+	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
+	assert.NilError(t, err)
+	get, err := service.GenerateYAMLFromComposeApp(*editing)
+	assert.NilError(t, err)
+	assert.Equal(t, string(get), saved)
 }

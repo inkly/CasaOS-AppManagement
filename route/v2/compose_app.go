@@ -69,7 +69,7 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 		}
 
 		// generate yaml should to replace all yaml.Marshal. But for now, we just use it Setting Page API
-		yaml, err := service.GenerateYAMLFromComposeApp(*editing, keep)
+		yaml, err := service.GenerateYAMLFromComposeApp(*editing)
 		if err != nil {
 			message := err.Error()
 			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
@@ -197,7 +197,7 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	}
 
 	_ = newComposeApp.SetUncontrolled(uncontrolled)
-	buf, err = service.GenerateYAMLFromComposeApp(*newComposeApp, keep)
+	buf, err = service.GenerateYAMLFromComposeApp(*newComposeApp)
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
