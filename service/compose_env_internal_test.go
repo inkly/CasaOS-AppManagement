@@ -10,6 +10,7 @@ import (
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/docker/compose/v2/pkg/api"
 	"gotest.tools/v3/assert"
 )
 
@@ -51,6 +52,26 @@ func TestPullAndApplyRestoresDotEnvOnFailure(t *testing.T) {
 	assert.ErrorContains(t, a.pullAndApply(context.Background(), broken, &newEnv), "cpu_count")
 	_, err = os.Stat(a.EnvFile())
 	assert.Assert(t, os.IsNotExist(err))
+
+	// loads and pulls, then the daemon refuses the container: the app failed to start, both
+	// files go back. Before, success was recorded before the start was examined.
+	service, client, err := apiService()
+	assert.NilError(t, err)
+	defer client.Close()
+	t.Cleanup(func() {
+		_ = service.Down(context.Background(), a.Name, api.DownOptions{RemoveOrphans: true})
+	})
+	unstartable := []byte("name: casaos-env-test\nservices:\n  a:\n    image: alpine:3.20\n    cap_add:\n      - NOT_A_CAP\n")
+	assert.NilError(t, os.WriteFile(a.EnvFile(), []byte("OLD=1\n"), 0o600))
+	err = a.pullAndApply(context.Background(), unstartable, &newEnv)
+	assert.Assert(t, err != nil, "an app the daemon refuses to create must fail the apply")
+	assert.Assert(t, strings.Contains(strings.ToLower(err.Error()), "cap"), err.Error())
+	env, err = os.ReadFile(a.EnvFile())
+	assert.NilError(t, err)
+	assert.Equal(t, string(env), "OLD=1\n")
+	compose, err = os.ReadFile(composeFile)
+	assert.NilError(t, err)
+	assert.Equal(t, string(compose), current)
 }
 
 // an App Store update rewrites docker-compose.yml from the runtime project, whose `.env` is

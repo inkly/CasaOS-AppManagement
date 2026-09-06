@@ -564,10 +564,10 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 
 	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
 
+	// an app that fails to start counts as a failed apply: the files are put back and the
+	// previous app started from them, so disk and running state never diverge
 	err = newComposeApp.UpWithCheckRequire(ctx, service)
-
-	success = true
-
+	success = err == nil
 	return err
 }
 
