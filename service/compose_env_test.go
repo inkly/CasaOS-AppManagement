@@ -225,3 +225,66 @@ func TestSettingsRoundTripKeepsDotEnvSpelling(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(get), saved)
 }
+
+// `${DATA}:/data` is the second most common use of .env; compose takes a leading reference for a
+// named volume and absolutises a kept `source` into `<app dir>/${DATA}`, so the editing load must
+// move it to the long syntax and leave paths as written.
+func TestSettingsRoundTripKeepsDotEnvReferenceInVolumes(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	id, composeFile := installedApp(t,
+		"name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    volumes:\n"+
+			"      - ${DATA}:/data\n      - ${DATA}/sub:/data/sub:ro\n      - $DATA:/data/short\n"+
+			"      - type: bind\n        source: ${DATA}\n        target: /data/long\n      - ./config:/config\n"+
+			"x-casaos:\n  title:\n    en_us: wg-easy\n",
+		"DATA=./real-data\n")
+	dir := filepath.Dir(composeFile)
+	keep, err := (&service.ComposeApp{WorkingDir: dir}).EnvKeys()
+	assert.NilError(t, err)
+
+	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
+	assert.NilError(t, err)
+	get, err := service.GenerateYAMLFromComposeApp(*editing)
+	assert.NilError(t, err)
+	for _, want := range []string{"source: ${DATA}\n", "source: ${DATA}/sub\n", "source: $DATA\n", "target: /data/sub", "read_only: true",
+		"target: /data/long", "source: ./config\n", "create_host_path: true"} {
+		assert.Assert(t, strings.Contains(string(get), want), "%s missing in\n%s", want, get)
+	}
+	assert.Equal(t, strings.Count(string(get), "type: bind"), 5, string(get))
+	for _, leak := range []string{"real-data", dir} { // no resolved value, no resolved path
+		assert.Assert(t, !strings.Contains(string(get), leak), "%s resolved in\n%s", leak, get)
+	}
+
+	// PUT of what GET returned is a no-op, and the short syntax a user types is accepted
+	save := func(yaml string) string {
+		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
+		assert.NilError(t, err)
+		out, err := service.GenerateYAMLFromComposeApp(*app)
+		assert.NilError(t, err)
+		return string(out)
+	}
+	assert.Equal(t, save(string(get)), string(get))
+	typed := save("name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    volumes:\n      - ${DATA}:/data\n      - ./config:/config\n")
+	assert.Assert(t, strings.Contains(typed, "source: ${DATA}\n"), typed)
+	assert.Assert(t, strings.Contains(typed, "source: ./config\n"), typed) // not the working directory of the parse
+
+	// what docker runs resolves every source, before and after the round trip
+	for _, text := range []string{"", string(get)} {
+		if text != "" {
+			assert.NilError(t, os.WriteFile(composeFile, []byte(text), 0o600))
+		}
+		running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
+		assert.NilError(t, err)
+		sources := []string{}
+		for _, volume := range running.Services[id].Volumes {
+			sources = append(sources, volume.Source)
+		}
+		data := filepath.Join(dir, "real-data")
+		assert.DeepEqual(t, sources, []string{data, filepath.Join(data, "sub"), data, data, filepath.Join(dir, "config")})
+	}
+
+	// a reference in the container path has no text form: an error, never a resolved value
+	_, composeFile = installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    volumes:\n      - /srv:${TARGET}\n", "TARGET=/data\n")
+	_, err = service.LoadComposeAppForEditing(id, composeFile, map[string]struct{}{"TARGET": {}})
+	assert.ErrorContains(t, err, "only the host path")
+	assert.Assert(t, !strings.Contains(err.Error(), "/data"), err.Error())
+}

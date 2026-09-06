@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -13,11 +14,13 @@ import (
 	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/dotenv"
+	"github.com/compose-spec/compose-go/v2/format"
 	"github.com/compose-spec/compose-go/v2/interpolation"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/tree"
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/mitchellh/mapstructure"
 )
 
 // EnvFile is the `.env` docker compose reads next to the compose file of an installed app.
@@ -144,7 +147,8 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 		cli.WithName(appID),
 		cli.WithLoadOptions(func(o *loader.Options) {
 			o.SkipValidation = true
-			keepPortRefs(o)
+			keepPathRefs(o)
+			keepRefCasts(o)
 			o.Interpolate.Substitute = substituteEscaping(keep)
 		}),
 	)
@@ -194,13 +198,26 @@ func substituteEscaping(keep map[string]struct{}) func(string, template.Mapping)
 	}
 }
 
-// keepPortRefs registers keptPortSyntax on `services.*.ports.*`.
-func keepPortRefs(o *loader.Options) {
+// keepPathRefs leaves every path as written in the file: compose would otherwise absolutise a kept
+// `source: ${DATA}` into `<app dir>/${DATA}` (and a settings save bakes the absolute path of the
+// moment into docker-compose.yml). So a relative `./config` comes out as `./config`, not as the
+// `<app dir>/config` the runtime computes; the runtime (LoadComposeAppFromConfigFile) still resolves
+// it. env_file is then read relative to the process, not the app: it is left unread, `environment`
+// shows what the file says instead of the merge with env_file the runtime computes.
+func keepPathRefs(o *loader.Options) {
+	o.ResolvePaths = false
+	o.SkipResolveEnvironment = true
+}
+
+// keepRefCasts registers keptPortSyntax on `services.*.ports.*` and keptVolumeSyntax on
+// `services.*.volumes.*`.
+func keepRefCasts(o *loader.Options) {
 	casts := map[tree.Path]interpolation.Cast{}
 	for path, cast := range o.Interpolate.TypeCastMapping { // the default mapping is shared, copy it
 		casts[path] = cast
 	}
 	casts[tree.NewPath("services", tree.PathMatchAll, "ports", tree.PathMatchList)] = keptPortSyntax
+	casts[tree.NewPath("services", tree.PathMatchAll, "volumes", tree.PathMatchList)] = keptVolumeSyntax
 	o.Interpolate.TypeCastMapping = casts
 }
 
@@ -248,4 +265,42 @@ func keptPortSyntax(value string) (any, error) {
 		long["host_ip"] = port.HostIP
 	}
 	return long, nil
+}
+
+// keptVolumeSyntax runs on each volume right after interpolation, where compose parses the short
+// syntax and takes a leading `${DATA}` for a named volume ("refers to undefined volume"). The
+// reference is swapped for an absolute path to parse, then put back in the long syntax, where
+// `source` is free text docker resolves from `.env` at run time.
+// ponytail: a leading reference is declared a bind mount, the common case; `.env` naming a named
+// volume there is not supported. A reference in the container path or the options is an error.
+func keptVolumeSyntax(value string) (any, error) {
+	if !strings.Contains(value, "$") {
+		return value, nil
+	}
+	const mark = "/\x01" // an absolute path, never in YAML text (NUL ends a spec for ParseVolume)
+
+	var refs []string
+	swapped := keptToken.ReplaceAllStringFunc(value, func(ref string) string {
+		refs = append(refs, ref)
+		return mark
+	})
+
+	volume, err := format.ParseVolume(swapped)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", value, err)
+	}
+	if strings.Count(volume.Source, mark) != len(refs) {
+		return nil, fmt.Errorf("%s: only the host path of a volume can reference .env", value)
+	}
+	for _, ref := range refs {
+		volume.Source = strings.Replace(volume.Source, mark, ref, 1)
+	}
+	volume.Target = path.Clean(volume.Target)
+
+	long := map[string]any{} // as compose encodes the short syntax
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &long, TagName: "yaml"})
+	if err != nil {
+		return nil, err
+	}
+	return long, decoder.Decode(volume)
 }

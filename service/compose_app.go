@@ -1084,7 +1084,8 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 			o.SkipInterpolation = skipInterpolation
 			o.SkipValidation = skipValidation
 			if keep != nil {
-				keepPortRefs(o)
+				keepPathRefs(o)
+				keepRefCasts(o)
 				o.Interpolate.Substitute = substituteEscaping(keep)
 			}
 
