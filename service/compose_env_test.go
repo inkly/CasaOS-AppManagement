@@ -53,7 +53,8 @@ func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 	logger.LogInitConsoleOnly()
 	t.Setenv("CASAOS_TEST_FROM_OS", "os")
 	id, composeFile := installedAppWithDotEnv(t, "SECRET=s3cr3t\nBARE=b\nTZ=Mars/Olympus\nCASAOS_TEST_FROM_OS=dotenv\n")
-	keep := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
+	keep, err := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
+	assert.NilError(t, err)
 	assert.DeepEqual(t, keep, map[string]struct{}{"SECRET": {}, "BARE": {}}) // TZ and the OS env win at run time, not kept
 
 	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
@@ -92,8 +93,16 @@ func TestParseEnvFile(t *testing.T) {
 		assert.ErrorContains(t, err, "line ", bad) // compose's own line-numbered message
 	}
 
-	// what the runtime defines itself is refused, not silently ignored
+	// a `${VAR}` inside .env resolves as at run time: the base map, then the OS environment
 	t.Setenv("CASAOS_TEST_FROM_OS", "os")
+	env, err = service.ParseEnvFile([]byte("FROM_OS=${CASAOS_TEST_FROM_OS:?x}\nFROM_BASE=${PUID}\n"))
+	assert.NilError(t, err)
+	assert.Equal(t, env["FROM_OS"], "os")
+	assert.Equal(t, env["FROM_BASE"], common.DefaultPUID)
+	_, err = service.ParseEnvFile([]byte("X=${CASAOS_TEST_NOT_SET:?unset}\n"))
+	assert.ErrorContains(t, err, "unset")
+
+	// what the runtime defines itself is refused, not silently ignored
 	for _, reserved := range []string{"TZ=Mars/Olympus\n", "AppID=x\n", "CASAOS_TEST_FROM_OS=dotenv\n"} {
 		_, err := service.ParseEnvFile([]byte("OK=1\n" + reserved))
 		assert.ErrorContains(t, err, "wins over .env", reserved)
@@ -106,13 +115,22 @@ func TestWriteEnvFile(t *testing.T) {
 	text, err := app.EnvFileText()
 	assert.NilError(t, err)
 	assert.Equal(t, len(text), 0)
-	assert.Equal(t, len(app.EnvKeys()), 0)
+	keys, err := app.EnvKeys()
+	assert.NilError(t, err)
+	assert.Equal(t, len(keys), 0)
 
 	assert.NilError(t, app.WriteEnvFile([]byte("A=1\nB=2\n")))
 	text, err = app.EnvFileText()
 	assert.NilError(t, err)
 	assert.Equal(t, string(text), "A=1\nB=2\n")
-	assert.DeepEqual(t, app.EnvKeys(), map[string]struct{}{"A": {}, "B": {}})
+	keys, err = app.EnvKeys()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, keys, map[string]struct{}{"A": {}, "B": {}})
+
+	// an unreadable .env is an error, not an empty keep-set that would bake every value
+	assert.NilError(t, os.WriteFile(app.EnvFile(), []byte("KEY VALUE\n"), 0o600))
+	_, err = app.EnvKeys()
+	assert.ErrorContains(t, err, "line 1")
 
 	assert.NilError(t, app.WriteEnvFile([]byte(" \n")))
 	_, err = os.Stat(app.EnvFile())
@@ -129,7 +147,8 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 			"      - ${PORT}:80\n      - 127.0.0.1:$PORT:81/udp\n      - 9000:90\n    environment:\n      SECRET: ${SECRET}\n"+
 			"x-casaos:\n  title:\n    en_us: wg-easy\n",
 		"SECRET=s3cr3t\nPORT=8080\n")
-	keep := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
+	keep, err := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
+	assert.NilError(t, err)
 
 	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
 	assert.NilError(t, err)

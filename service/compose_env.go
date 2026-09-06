@@ -48,10 +48,26 @@ func reservedEnvKey(key string) bool {
 	return ok
 }
 
-// ParseEnvFile validates `.env` text with the parser compose itself uses at load time, so what
-// passes here is exactly what the app will get; a reserved key is refused rather than ignored.
+// runtimeEnvLookup resolves a `${VAR}` inside `.env` the way LoadComposeAppFromConfigFile does:
+// the base interpolation map, then the environment of this process.
+// ponytail: AppID is not known here, a `.env` referencing `${AppID}` is refused although it runs.
+func runtimeEnvLookup(key string) (string, bool) {
+	if value, ok := baseInterpolationMap()[key]; ok {
+		return value, true
+	}
+	return os.LookupEnv(key)
+}
+
+// parseEnv reads `.env` text with the parser and the lookup compose itself uses at load time, so
+// what passes here is exactly what the app will get.
+func parseEnv(text []byte) (map[string]string, error) {
+	return dotenv.ParseWithLookup(bytes.NewReader(text), runtimeEnvLookup)
+}
+
+// ParseEnvFile validates `.env` text as the runtime will read it; a reserved key is refused
+// rather than ignored.
 func ParseEnvFile(text []byte) (map[string]string, error) {
-	env, err := dotenv.Parse(bytes.NewReader(text))
+	env, err := parseEnv(text)
 	if err != nil {
 		return nil, err
 	}
@@ -78,19 +94,24 @@ func (a *ComposeApp) WriteEnvFile(text []byte) error {
 // Values of those stay `${KEY}` references in docker-compose.yml instead of being baked in,
 // otherwise the first settings save would copy the secrets into the compose file and every later
 // `.env` edit would be a no-op. A reserved key (see reservedEnvKey) is left out: the editor then
-// shows the value the runtime uses. A missing or unparsable file yields an empty set.
-func (a *ComposeApp) EnvKeys() map[string]struct{} {
-	keys := map[string]struct{}{}
-	env, err := dotenv.Read(a.EnvFile())
+// shows the value the runtime uses. A missing file yields an empty set; an unreadable one is an
+// error, an empty set would bake every value on the next save.
+func (a *ComposeApp) EnvKeys() (map[string]struct{}, error) {
+	text, err := a.EnvFileText()
 	if err != nil {
-		return keys
+		return nil, err
 	}
+	env, err := parseEnv(text)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", a.EnvFile(), err)
+	}
+	keys := map[string]struct{}{}
 	for k := range env {
 		if !reservedEnvKey(k) {
 			keys[k] = struct{}{}
 		}
 	}
-	return keys
+	return keys, nil
 }
 
 // keepRefs is the environment the settings pipeline resolves a kept key from: `${KEY}` itself, so

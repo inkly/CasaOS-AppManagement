@@ -60,7 +60,12 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 	if accept == common.MIMEApplicationYAML {
 		// the editor must see `${KEY}` for what `.env` defines, never the resolved value: the next
 		// save would bake it into docker-compose.yml. No fallback to the resolved app for that reason.
-		keep := composeApp.EnvKeys()
+		keep, err := composeApp.EnvKeys()
+		if err != nil {
+			message := err.Error()
+			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+		}
+
 		editing, err := service.LoadComposeAppForEditing(id, composeApp.ComposeFiles[0], keep)
 		if err != nil {
 			message := fmt.Sprintf("failed to load compose app with its .env references kept: %s", err)
@@ -178,7 +183,12 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	}
 
 	// validate new compose yaml (ComposeAppFromSettingsYAML says why interpolation stays on: #1988)
-	keep := composeApp.EnvKeys()
+	keep, err := composeApp.EnvKeys()
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
 	newComposeApp, err := service.ComposeAppFromSettingsYAML(buf, keep)
 	if err != nil {
 		message := err.Error()
