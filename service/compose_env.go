@@ -267,15 +267,21 @@ func keepRefCasts(o *loader.Options) {
 // keptPortSyntax runs on each port right after interpolation, where compose parses the short
 // syntax and refuses `${PORT}:80` ("invalid hostPort"). A kept reference is moved to the long
 // syntax, where `published` is free text docker resolves from `.env` at run time: the reference
-// is swapped for a port number to parse, then put back.
+// is swapped for a port number to parse, then put back; a reference in the host IP of
+// `ip:host:container` is swapped for an IP the same way.
 // ponytail: a reference in the container port (`80:${TARGET}`) has no text form, it is an error.
 func keptPortSyntax(value string) (any, error) {
 	if !strings.Contains(value, "$") {
 		return value, nil
 	}
 
+	hostIP, spec := "", value
+	if i := strings.Index(spec, ":"); i > 0 && strings.Count(spec, ":") >= 2 && keptToken.FindString(spec[:i]) == spec[:i] {
+		hostIP, spec = spec[:i], "127.0.0.1"+spec[i:]
+	}
+
 	var refs []string
-	resolved := keptToken.ReplaceAllStringFunc(value, func(ref string) string {
+	resolved := keptToken.ReplaceAllStringFunc(spec, func(ref string) string {
 		refs = append(refs, ref)
 		return strconv.Itoa(65000 + len(refs))
 	})
@@ -289,14 +295,15 @@ func keptPortSyntax(value string) (any, error) {
 	}
 
 	port := parsed[0]
+	if hostIP != "" {
+		port.HostIP = hostIP
+	}
 	restored := 0
 	for i, ref := range refs {
 		placeholder := strconv.Itoa(65001 + i)
-		for _, field := range []*string{&port.Published, &port.HostIP} {
-			if strings.Contains(*field, placeholder) {
-				*field = strings.ReplaceAll(*field, placeholder, ref)
-				restored++
-			}
+		if strings.Contains(port.Published, placeholder) {
+			port.Published = strings.ReplaceAll(port.Published, placeholder, ref)
+			restored++
 		}
 	}
 	if restored != len(refs) {

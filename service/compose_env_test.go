@@ -144,9 +144,9 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 	logger.LogInitConsoleOnly()
 	id, composeFile := installedApp(t,
 		"name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy\n    ports:\n"+
-			"      - ${PORT}:80\n      - 127.0.0.1:$PORT:81/udp\n      - 9000:90\n    environment:\n      SECRET: ${SECRET}\n"+
+			"      - ${PORT}:80\n      - 127.0.0.1:$PORT:81/udp\n      - ${HOSTIP}:${PORT}:82\n      - 9000:90\n    environment:\n      SECRET: ${SECRET}\n"+
 			"x-casaos:\n  title:\n    en_us: wg-easy\n",
-		"SECRET=s3cr3t\nPORT=8080\n")
+		"SECRET=s3cr3t\nPORT=8080\nHOSTIP=10.0.0.5\n")
 	keep, err := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
 	assert.NilError(t, err)
 
@@ -154,12 +154,14 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 	assert.NilError(t, err)
 	get, err := service.GenerateYAMLFromComposeApp(*editing)
 	assert.NilError(t, err)
-	for _, want := range []string{"published: ${PORT}", "published: $PORT", "target: 80", "target: 81", "protocol: udp", "host_ip: 127.0.0.1", "published: \"9000\"", "SECRET: ${SECRET}"} {
+	for _, want := range []string{"published: ${PORT}", "published: $PORT", "target: 80", "target: 81", "protocol: udp", "host_ip: 127.0.0.1", "published: \"9000\"", "SECRET: ${SECRET}",
+		"target: 82", "host_ip: ${HOSTIP}"} {
 		assert.Assert(t, strings.Contains(string(get), want), "%s missing in\n%s", want, get)
 	}
-	for _, leak := range []string{"8080", "s3cr3t"} {
+	for _, leak := range []string{"8080", "s3cr3t", "10.0.0.5"} {
 		assert.Assert(t, !strings.Contains(string(get), leak), "%s resolved in\n%s", leak, get)
 	}
+	assert.Equal(t, strings.Count(string(get), "host_ip: 127.0.0.1"), 1, string(get)) // the IP that stood in for ${HOSTIP} is gone
 
 	// the settings parse takes both what GET returned and the short syntax a user types
 	save := func(yaml string) string {
@@ -177,6 +179,13 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInPorts(t *testing.T) {
 	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
 	assert.NilError(t, err)
 	assert.Equal(t, running.Services[id].Ports[0].Published, "8080")
+	assert.Equal(t, len(running.Services[id].Ports), 4)
+	for _, port := range running.Services[id].Ports {
+		if port.Target == 82 {
+			assert.Equal(t, port.HostIP, "10.0.0.5")
+			assert.Equal(t, port.Published, "8080")
+		}
+	}
 
 	// a reference where compose needs a number has no text form: an error, never a resolved value
 	_, composeFile = installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    ports:\n      - 80:${PORT}\n", "PORT=8080\n")
