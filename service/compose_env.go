@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -231,16 +232,23 @@ func substituteEscaping(keep map[string]struct{}) func(string, template.Mapping)
 			return mark + strconv.Itoa(len(kept)-1) + mark
 		})
 
-		resolved, err := template.Substitute(protected, mapping)
-		if err != nil {
-			return "", err
+		unmark := func(s string) string {
+			for i, token := range kept {
+				m := mark + strconv.Itoa(i) + mark
+				s = strings.ReplaceAll(s, m, token)
+				// compose-go quotes the text it choked on, which spells a NUL as \x00
+				s = strings.ReplaceAll(s, strings.Trim(strconv.Quote(m), `"`), token)
+			}
+			return s
 		}
 
-		resolved = strings.ReplaceAll(resolved, "$", "$$")
-		for i, token := range kept {
-			resolved = strings.ReplaceAll(resolved, mark+strconv.Itoa(i)+mark, token)
+		resolved, err := template.Substitute(protected, mapping)
+		if err != nil {
+			// the error quotes the text it choked on: give it back the user's tokens, not the marks
+			return "", errors.New(unmark(err.Error()))
 		}
-		return resolved, nil
+
+		return unmark(strings.ReplaceAll(resolved, "$", "$$")), nil
 	}
 }
 

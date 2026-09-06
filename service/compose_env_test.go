@@ -313,8 +313,15 @@ func TestEditingLoadNamesTheFieldThatCannotKeepDotEnv(t *testing.T) {
 		assert.Assert(t, !strings.Contains(err.Error(), "1.5"), err.Error())
 	}
 
+	// an invalid template quotes the text in its error: the user's tokens, never the marks
+	id, composeFile := installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    environment:\n      X: ${SECRET} ${\n", "SECRET=s3cr3t\n")
+	_, err := service.LoadComposeAppForEditing(id, composeFile, map[string]struct{}{"SECRET": {}})
+	assert.ErrorContains(t, err, "${SECRET} ${")
+	assert.Assert(t, !strings.Contains(err.Error(), "\x00"), "%q", err.Error())
+	assert.Assert(t, !strings.Contains(err.Error(), "s3cr3t"), err.Error())
+
 	// env_file is free text: kept, as written, and the runtime resolves it
-	id, composeFile := installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    env_file: ${ENVF}\n    environment:\n      B: 2\n", "ENVF=./x.env\n")
+	id, composeFile = installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    env_file: ${ENVF}\n    environment:\n      B: 2\n", "ENVF=./x.env\n")
 	assert.NilError(t, os.WriteFile(filepath.Join(filepath.Dir(composeFile), "x.env"), []byte("A=1\n"), 0o600))
 	keep = map[string]struct{}{"ENVF": {}}
 	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
