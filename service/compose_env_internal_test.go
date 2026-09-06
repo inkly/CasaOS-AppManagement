@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
@@ -50,4 +51,47 @@ func TestPullAndApplyRestoresDotEnvOnFailure(t *testing.T) {
 	assert.ErrorContains(t, a.pullAndApply(context.Background(), broken, &newEnv), "cpu_count")
 	_, err = os.Stat(a.EnvFile())
 	assert.Assert(t, os.IsNotExist(err))
+}
+
+// an App Store update rewrites docker-compose.yml from the runtime project, whose `.env` is
+// resolved: one update baked every secret, port and path into the file and left `.env` dead
+func TestUpdateKeepsDotEnvReferencesInComposeFile(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	const compose = "name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy:1\n    environment:\n      SECRET: ${SECRET}\n" +
+		"    ports:\n      - ${PORT}:80\n    volumes:\n      - ${DATA}:/data\n      - ./config:/config\nx-casaos:\n  title:\n    en_us: wg-easy\n"
+	assert.NilError(t, os.WriteFile(composeFile, []byte(compose), 0o600))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=s3cr3t\nPORT=8080\nDATA=/srv/d\n"), 0o600))
+
+	a, err := LoadComposeAppFromConfigFile("wg-easy", composeFile) // the runtime project, as List serves it
+	assert.NilError(t, err)
+	assert.Equal(t, *a.Services["wg-easy"].Environment["SECRET"], "s3cr3t")
+	store, err := NewComposeAppFromYAML([]byte("name: wg-easy\nservices:\n  wg-easy:\n    image: ghcr.io/wg-easy/wg-easy:2\n"), true, true)
+	assert.NilError(t, err)
+
+	out, err := a.updatedComposeYAML(store)
+	assert.NilError(t, err)
+	for _, want := range []string{"image: ghcr.io/wg-easy/wg-easy:2", "SECRET: ${SECRET}", "published: ${PORT}", "source: ${DATA}\n", "source: ./config\n"} {
+		assert.Assert(t, strings.Contains(string(out), want), "%s missing in\n%s", want, out)
+	}
+	for _, leak := range []string{"s3cr3t", "8080", "/srv/d", dir} {
+		assert.Assert(t, !strings.Contains(string(out), leak), "%s baked in\n%s", leak, out)
+	}
+
+	// and the runtime still resolves what the update wrote
+	assert.NilError(t, os.WriteFile(composeFile, out, 0o600))
+	running, err := LoadComposeAppFromConfigFile("wg-easy", composeFile)
+	assert.NilError(t, err)
+	service := running.Services["wg-easy"]
+	assert.Equal(t, service.Image, "ghcr.io/wg-easy/wg-easy:2")
+	assert.Equal(t, *service.Environment["SECRET"], "s3cr3t")
+	assert.Equal(t, service.Ports[0].Published, "8080")
+	assert.Assert(t, strings.HasSuffix(filepath.ToSlash(service.Volumes[0].Source), "/srv/d"), service.Volumes[0].Source)
+	assert.Equal(t, service.Volumes[1].Source, filepath.Join(dir, "config"))
+
+	// an unreadable .env is an error: an empty keep-set would bake every value
+	assert.NilError(t, os.WriteFile(a.EnvFile(), []byte("KEY VALUE\n"), 0o600))
+	_, err = a.updatedComposeYAML(store)
+	assert.ErrorContains(t, err, "line 1")
 }

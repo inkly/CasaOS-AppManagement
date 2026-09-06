@@ -214,41 +214,7 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 		return ErrNotFoundInAppStore
 	}
 
-	localComposeAppServices := sortedServiceNames(a.Services)
-	storeComposeAppServices := sortedServiceNames(storeComposeApp.Services)
-
-	localAbsentOfStore, storeAbsentOfLocal := lo.Difference(localComposeAppServices, storeComposeAppServices)
-	if len(localAbsentOfStore) > 0 {
-		logger.Error("local compose app has container apps that are not present in store compose app, thus update is not possible", zap.Strings("absent", localAbsentOfStore))
-		return ErrComposeAppNotMatch
-	}
-
-	if len(storeAbsentOfLocal) > 0 {
-		logger.Error("store compose app has container apps that are not present in local compose app, thus update is not possible", zap.Strings("absent", storeAbsentOfLocal))
-		return ErrComposeAppNotMatch
-	}
-
-	for name, service := range storeComposeApp.Services {
-		localComposeAppService, ok := a.Services[name]
-		if !ok {
-			return ErrComposeAppNotMatch
-		}
-
-		for _, tag := range common.NeedCheckDigestTags {
-			if strings.HasSuffix(service.Image, tag) {
-				// keep latest
-			} else {
-				localComposeAppService.Image = service.Image
-			}
-		}
-
-		a.Services[name] = localComposeAppService
-	}
-
-	// the code is need by stable diffusion.
-	removeRuntime(a)
-
-	newComposeYAML, err := yaml.Marshal(a)
+	newComposeYAML, err := a.updatedComposeYAML(storeComposeApp)
 	if err != nil {
 		return err
 	}
@@ -279,6 +245,59 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 	}(ctx)
 
 	return nil
+}
+
+// updatedComposeYAML is the docker-compose.yml an update writes: the file on disk with the image of
+// each service replaced by the store's. It is built from the editing load of that file, never from
+// a itself: a is the runtime project (List), with `.env` resolved, and marshalling it bakes every
+// secret, published port and host path into the compose file, leaving `.env` dead after the first
+// App Store update. An unreadable `.env` is an error for the same reason.
+func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, error) {
+	keys, err := a.EnvKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	local, err := LoadComposeAppForEditing(a.Name, a.ComposeFiles[0], settingsKeep(keys))
+	if err != nil {
+		return nil, err
+	}
+
+	localComposeAppServices := sortedServiceNames(local.Services)
+	storeComposeAppServices := sortedServiceNames(storeComposeApp.Services)
+
+	localAbsentOfStore, storeAbsentOfLocal := lo.Difference(localComposeAppServices, storeComposeAppServices)
+	if len(localAbsentOfStore) > 0 {
+		logger.Error("local compose app has container apps that are not present in store compose app, thus update is not possible", zap.Strings("absent", localAbsentOfStore))
+		return nil, ErrComposeAppNotMatch
+	}
+
+	if len(storeAbsentOfLocal) > 0 {
+		logger.Error("store compose app has container apps that are not present in local compose app, thus update is not possible", zap.Strings("absent", storeAbsentOfLocal))
+		return nil, ErrComposeAppNotMatch
+	}
+
+	for name, service := range storeComposeApp.Services {
+		localComposeAppService, ok := local.Services[name]
+		if !ok {
+			return nil, ErrComposeAppNotMatch
+		}
+
+		for _, tag := range common.NeedCheckDigestTags {
+			if strings.HasSuffix(service.Image, tag) {
+				// keep latest
+			} else {
+				localComposeAppService.Image = service.Image
+			}
+		}
+
+		local.Services[name] = localComposeAppService
+	}
+
+	// the code is need by stable diffusion.
+	removeRuntime(local)
+
+	return yaml.Marshal(local)
 }
 
 // TODO rename the function to service and add error return value
