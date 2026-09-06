@@ -454,7 +454,9 @@ paths:
 
         If the `Accept` header is set to `application/yaml`, the response will be the interpolated `docker-compose.yml` content that follows [Compose Specification](https://compose-spec.io).
 
-        > The difference between this and `/apps/{id}/compose` is that the compose detail returned has all environment variables interpolated. E.g. `$TZ` will be replaced by actual timezone text.
+        > - The difference between this and `/apps/{id}/compose` is that the compose detail returned has all environment variables interpolated. E.g. `$TZ` will be replaced by actual timezone text.
+        > - A reference to a key of the app's `.env` (`${KEY}`, `$KEY`, `${KEY:-default}`) is returned as written, not resolved, in `environment`, `env_file`, `ports` and `volumes` (the host side of a port or a volume; `ports` and `volumes` come back in the long syntax). In any other field (`cpus`, `mem_limit`, `privileged`...) such a reference cannot be kept: the request fails with `500` naming the field, and that field has to be edited in the file on disk.
+        > - Paths (`volumes`, `env_file`, `build`...) are returned as written in the file, relative to the app directory when they are; docker compose resolves them when the app is (re)created. `env_file` is not merged into `environment`.
       operationId: myComposeApp
       tags:
         - Compose methods
@@ -538,6 +540,8 @@ paths:
         Returns the raw text of the `.env` file next to the `docker-compose.yml` of the app, or an empty body when there is none.
 
         Keys defined there are referenced as `${KEY}` from the compose YAML and resolved by docker compose when the app is (re)created.
+
+        > A reference survives the settings round trip (`GET`/`PUT /compose/{id}`) in `environment`, `env_file`, `ports` and `volumes` only; see `GET /compose/{id}`.
       operationId: composeAppEnv
       tags:
         - Compose methods
@@ -563,6 +567,7 @@ paths:
         > - The request has to be `content-type: text/plain` and the body is the whole file, one `KEY=VALUE` per line as docker compose reads it.
         > - An empty (or missing) body removes the file.
         > - A key the runtime defines itself (`AppID`, `TZ`, `PUID`, `PGID`, `DefaultUserName`, `DefaultPassword`, the environment of the CasaOS process) wins over `.env` and is refused with `400`.
+        > - A reference to a key of the file is kept by the settings round trip (`GET`/`PUT /compose/{id}`) in `environment`, `env_file`, `ports` and `volumes` only; a field that needs a number, a boolean or a size (`cpus`, `mem_limit`, `privileged`...) cannot reference `.env` from the settings editor.
         > - When `dry_run=true` is provided in the query string, the body is only validated.
       operationId: applyComposeAppEnv
       tags:

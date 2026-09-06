@@ -158,11 +158,18 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 
 	project, err := options.LoadProject(context.Background())
 	if err != nil {
-		return nil, err
+		// the loader names the field (`services.a.cpus`) and, since `.env` is never read here, shows
+		// the reference itself, never its value
+		return nil, fmt.Errorf("%s: %w; a .env reference is kept only in %s, for any other field edit the file on disk", configFile, err, keptFields)
 	}
 
 	return (*ComposeApp)(project), nil
 }
+
+// keptFields is where a `.env` reference survives the settings round trip: free-text fields, and
+// the two casts below. Anywhere compose needs a number, a boolean or a size, the reference cannot
+// be kept and the editing load fails instead of serving the resolved value.
+const keptFields = "environment, env_file, ports and volumes"
 
 // keptToken splits compose text into what the settings pipeline copies verbatim: `$$` (an escaped
 // dollar, so the name after it is not a reference), `${NAME...}` with any modifier, `$NAME`.

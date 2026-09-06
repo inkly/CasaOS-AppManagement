@@ -288,3 +288,36 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInVolumes(t *testing.T) {
 	assert.ErrorContains(t, err, "only the host path")
 	assert.Assert(t, !strings.Contains(err.Error(), "/data"), err.Error())
 }
+
+// a field compose needs typed (a number, a boolean, a size) cannot keep a reference: the editing
+// load fails naming the field and never shows the value, .env is not read there
+func TestEditingLoadNamesTheFieldThatCannotKeepDotEnv(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	keep := map[string]struct{}{"CPUS": {}}
+	for _, field := range []string{"cpus: ${CPUS}", "cpu_count: $CPUS", "privileged: ${CPUS:-false}", "mem_limit: ${CPUS}"} {
+		id, composeFile := installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    "+field+"\n", "CPUS=1.5\n")
+		_, err := service.LoadComposeAppForEditing(id, composeFile, keep)
+		assert.ErrorContains(t, err, strings.SplitN(field, ":", 2)[0], field)
+		assert.ErrorContains(t, err, "kept only in environment, env_file, ports and volumes", field)
+		assert.ErrorContains(t, err, composeFile, field)
+		assert.Assert(t, !strings.Contains(err.Error(), "1.5"), err.Error())
+	}
+
+	// env_file is free text: kept, as written, and the runtime resolves it
+	id, composeFile := installedApp(t, "name: wg-easy\nservices:\n  wg-easy:\n    image: i\n    env_file: ${ENVF}\n    environment:\n      B: 2\n", "ENVF=./x.env\n")
+	assert.NilError(t, os.WriteFile(filepath.Join(filepath.Dir(composeFile), "x.env"), []byte("A=1\n"), 0o600))
+	keep = map[string]struct{}{"ENVF": {}}
+	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
+	assert.NilError(t, err)
+	get, err := service.GenerateYAMLFromComposeApp(*editing)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(get), "- ${ENVF}\n"), string(get))
+	assert.Assert(t, !strings.Contains(string(get), "A:"), string(get)) // not merged into environment
+	saved, err := service.ComposeAppFromSettingsYAML(get, keep)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(composeFile, get, 0o600))
+	running, err := service.LoadComposeAppFromConfigFile(id, composeFile)
+	assert.NilError(t, err)
+	assert.Equal(t, saved.Services[id].EnvFiles[0].Path, "${ENVF}")
+	assert.Equal(t, *running.Services[id].Environment["A"], "1")
+}

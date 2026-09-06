@@ -68,7 +68,7 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 
 		editing, err := service.LoadComposeAppForEditing(id, composeApp.ComposeFiles[0], keep)
 		if err != nil {
-			message := fmt.Sprintf("failed to load compose app with its .env references kept: %s", err)
+			message := err.Error()
 			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 		}
 
