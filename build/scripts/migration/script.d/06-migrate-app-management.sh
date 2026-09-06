@@ -86,12 +86,10 @@ __remove_legacy_docker_api_override() {
     systemctl restart docker || __warning "Failed to restart Docker after removing the Docker API override."
 }
 
-# Migration tools are fetched from GitHub. No geo-IP lookup is made: this used
-# to ask ipconfig.io, then ifconfig.io, for the host's country in order to pick
-# a mirror, so every install and every upgrade contacted two third parties.
-# Set CASAOS_DOWNLOAD_DOMAIN, trailing slash included, to use a mirror instead:
-#   curl -fsSL <install.sh> | sudo CASAOS_DOWNLOAD_DOMAIN=https://mirror.example/ bash
-DOWNLOAD_DOMAIN="${CASAOS_DOWNLOAD_DOMAIN:-https://github.com/}"
+# The download domain is a constant on purpose. It used to be chosen by curling
+# ipconfig.io at every install; it is not an environment knob either, because what
+# it points at is downloaded and run as root without verification.
+DOWNLOAD_DOMAIN="https://github.com/"
 BUILD_PATH=$(dirname "${BASH_SOURCE[0]}")/../../..
 
 readonly BUILD_PATH
