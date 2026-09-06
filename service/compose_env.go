@@ -34,10 +34,33 @@ func (a *ComposeApp) EnvFileText() ([]byte, error) {
 	return text, err
 }
 
+// reservedEnvKey says whether the runtime defines key itself: AppID, the base interpolation map
+// (TZ, PUID, PGID...) and the environment of this process all win over `.env` when docker loads
+// the app (LoadComposeAppFromConfigFile), so a `.env` definition of one is dead text.
+func reservedEnvKey(key string) bool {
+	if key == "AppID" {
+		return true
+	}
+	if _, ok := baseInterpolationMap()[key]; ok {
+		return true
+	}
+	_, ok := os.LookupEnv(key)
+	return ok
+}
+
 // ParseEnvFile validates `.env` text with the parser compose itself uses at load time, so what
-// passes here is exactly what the app will get.
+// passes here is exactly what the app will get; a reserved key is refused rather than ignored.
 func ParseEnvFile(text []byte) (map[string]string, error) {
-	return dotenv.Parse(bytes.NewReader(text))
+	env, err := dotenv.Parse(bytes.NewReader(text))
+	if err != nil {
+		return nil, err
+	}
+	for key := range env {
+		if reservedEnvKey(key) {
+			return nil, fmt.Errorf("%s is set by CasaOS and wins over .env, remove it from the file", key)
+		}
+	}
+	return env, nil
 }
 
 // WriteEnvFile replaces the `.env`; an empty body removes it.
@@ -54,7 +77,8 @@ func (a *ComposeApp) WriteEnvFile(text []byte) error {
 // EnvKeys is the keep-set of the settings round trip: the names defined in the app's `.env`.
 // Values of those stay `${KEY}` references in docker-compose.yml instead of being baked in,
 // otherwise the first settings save would copy the secrets into the compose file and every later
-// `.env` edit would be a no-op. A missing or unparsable file yields an empty set.
+// `.env` edit would be a no-op. A reserved key (see reservedEnvKey) is left out: the editor then
+// shows the value the runtime uses. A missing or unparsable file yields an empty set.
 func (a *ComposeApp) EnvKeys() map[string]struct{} {
 	keys := map[string]struct{}{}
 	env, err := dotenv.Read(a.EnvFile())
@@ -62,7 +86,9 @@ func (a *ComposeApp) EnvKeys() map[string]struct{} {
 		return keys
 	}
 	for k := range env {
-		keys[k] = struct{}{}
+		if !reservedEnvKey(k) {
+			keys[k] = struct{}{}
+		}
 	}
 	return keys
 }

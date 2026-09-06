@@ -562,6 +562,7 @@ paths:
 
         > - The request has to be `content-type: text/plain` and the body is the whole file, one `KEY=VALUE` per line as docker compose reads it.
         > - An empty (or missing) body removes the file.
+        > - A key the runtime defines itself (`AppID`, `TZ`, `PUID`, `PGID`, `DefaultUserName`, `DefaultPassword`, the environment of the CasaOS process) wins over `.env` and is refused with `400`.
         > - When `dry_run=true` is provided in the query string, the body is only validated.
       operationId: applyComposeAppEnv
       tags:

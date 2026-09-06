@@ -51,9 +51,10 @@ func TestDotEnvIsHonouredForInstalledApp(t *testing.T) {
 // off from its .env.
 func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 	logger.LogInitConsoleOnly()
-	id, composeFile := installedAppWithDotEnv(t, "SECRET=s3cr3t\nBARE=b\n")
+	t.Setenv("CASAOS_TEST_FROM_OS", "os")
+	id, composeFile := installedAppWithDotEnv(t, "SECRET=s3cr3t\nBARE=b\nTZ=Mars/Olympus\nCASAOS_TEST_FROM_OS=dotenv\n")
 	keep := (&service.ComposeApp{WorkingDir: filepath.Dir(composeFile)}).EnvKeys()
-	assert.DeepEqual(t, keep, map[string]struct{}{"SECRET": {}, "BARE": {}})
+	assert.DeepEqual(t, keep, map[string]struct{}{"SECRET": {}, "BARE": {}}) // TZ and the OS env win at run time, not kept
 
 	editing, err := service.LoadComposeAppForEditing(id, composeFile, keep)
 	assert.NilError(t, err)
@@ -63,6 +64,7 @@ func TestSettingsRoundTripKeepsDotEnvReferences(t *testing.T) {
 	assert.Assert(t, !strings.Contains(string(get), "s3cr3t"), string(get))
 	assert.Assert(t, strings.Contains(string(get), "PASSWORD_HASH: $$2a$$12$$zBIMbL5/"), string(get)) // still escaped exactly once
 	assert.Assert(t, strings.Contains(string(get), "BARE: ${BARE}"), string(get))                     // bare key becomes an explicit reference
+	assert.Assert(t, !strings.Contains(string(get), "TZ: ${TZ}"), string(get))                      // the runtime value, as docker sees it
 
 	save := func(yaml string) string {
 		app, err := service.ComposeAppFromSettingsYAML([]byte(yaml), keep)
@@ -88,6 +90,13 @@ func TestParseEnvFile(t *testing.T) {
 	for _, bad := range []string{"KEY VALUE\n", "KEY=\"unterminated\n"} {
 		_, err := service.ParseEnvFile([]byte(bad))
 		assert.ErrorContains(t, err, "line ", bad) // compose's own line-numbered message
+	}
+
+	// what the runtime defines itself is refused, not silently ignored
+	t.Setenv("CASAOS_TEST_FROM_OS", "os")
+	for _, reserved := range []string{"TZ=Mars/Olympus\n", "AppID=x\n", "CASAOS_TEST_FROM_OS=dotenv\n"} {
+		_, err := service.ParseEnvFile([]byte("OK=1\n" + reserved))
+		assert.ErrorContains(t, err, "wins over .env", reserved)
 	}
 }
 
